@@ -43,16 +43,14 @@ pub struct Renderer;
 
 impl Renderer {
     pub unsafe fn paint(hwnd: HWND) {
-        crate::log_info("paint: WM_PAINT received");
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(hwnd, &mut ps);
         if hdc.0.is_null() {
-            crate::log_info("paint: BeginPaint returned null");
             return;
         }
 
         if let Err(e) = Self::draw(hwnd) {
-            crate::log_info(&format!("paint: draw returned error {:?}", e));
+            crate::log_info(&format!("paint: draw error {:?}", e));
         }
 
         let _ = EndPaint(hwnd, &ps);
@@ -63,8 +61,6 @@ impl Renderer {
         let _ = GetClientRect(hwnd, &mut client_rect);
         let width = (client_rect.right - client_rect.left) as u32;
         let height = (client_rect.bottom - client_rect.top) as u32;
-
-        crate::log_info(&format!("draw: client size = {}x{}", width, height));
 
         if width == 0 || height == 0 {
             return Ok(());
@@ -400,11 +396,9 @@ impl Renderer {
         }
 
         match rt.EndDraw(None, None) {
-            Ok(_) => {
-                crate::log_info("draw: EndDraw succeeded");
-            }
+            Ok(_) => {}
             Err(e) => {
-                crate::log_info(&format!("draw: EndDraw failed with error {:?}", e));
+                // D2DERR_RECREATE_TARGET — device lost, drop target so it's rebuilt next paint
                 if e.code().0 == 0x8899000C_u32 as i32 {
                     *rt_guard = None;
                 } else {

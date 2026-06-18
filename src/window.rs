@@ -1,16 +1,22 @@
 use std::ptr::null_mut;
+use once_cell::sync::Lazy;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM, COLORREF};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, FindWindowExW, FindWindowW, GetWindowRect, RegisterClassW,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU, SWP_NOACTIVATE,
+    RegisterWindowMessageW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SW_SHOW, WM_DESTROY, WM_PAINT, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, SetLayeredWindowAttributes, LWA_COLORKEY,
     WM_COMMAND, WM_CREATE, WM_TIMER, WM_RBUTTONUP, WM_CONTEXTMENU, DestroyWindow, SetTimer,
     KillTimer, HWND_TOPMOST, WS_EX_NOACTIVATE, WM_ERASEBKGND,
 };
 use windows::Win32::Graphics::Gdi::HBRUSH;
+
+static WM_TASKBAR_CREATED: Lazy<u32> = Lazy::new(|| unsafe {
+    RegisterWindowMessageW(w!("TaskbarCreated"))
+});
 
 use crate::renderer::Renderer;
 use crate::tray::{WM_TRAY_ICON, ID_EXIT, ID_SHOW_PER_CORE, ID_AUTOSTART, show_tray_menu};
@@ -25,13 +31,18 @@ pub unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match msg {
         WM_CREATE => {
-            // Set a timer to check for taskbar position/size changes every 1 second
-            SetTimer(hwnd, 1, 1000, None);
+            SetTimer(hwnd, 1, 1000, None); // full reposition (taskbar may move/resize)
+            SetTimer(hwnd, 2, 200, None);  // fast Z-order reassertion
             LRESULT(0)
         }
         WM_TIMER => {
-            if wparam.0 == 1 {
-                reposition_window(hwnd);
+            match wparam.0 {
+                1 => reposition_window(hwnd),
+                2 => {
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE).ok();
+                }
+                _ => {}
             }
             LRESULT(0)
         }
@@ -71,8 +82,14 @@ pub unsafe extern "system" fn window_proc(
         }
         WM_DESTROY => {
             let _ = KillTimer(hwnd, 1);
+            let _ = KillTimer(hwnd, 2);
             crate::tray::remove_tray_icon(hwnd);
             windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
+            LRESULT(0)
+        }
+        // Explorer restarted — taskbar was recreated, re-anchor the overlay
+        msg if msg == *WM_TASKBAR_CREATED => {
+            reposition_window(hwnd);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -135,67 +152,41 @@ pub fn create_overlay() -> HWND {
 
 pub fn reposition_window(hwnd: HWND) {
     unsafe {
-        static mut LAST_LEFT: i32 = 0;
-        static mut LAST_TOP: i32 = 0;
-        static mut LAST_WIDTH: i32 = 0;
-        static mut LAST_HEIGHT: i32 = 0;
-
         let h_taskbar = FindWindowW(w!("Shell_TrayWnd"), None).unwrap_or(HWND(null_mut()));
         if h_taskbar.0.is_null() {
-            crate::log_info("reposition_window: Shell_TrayWnd not found");
             return;
         }
 
         let h_tray = FindWindowExW(h_taskbar, None, w!("TrayNotifyWnd"), None).unwrap_or(HWND(null_mut()));
         if h_tray.0.is_null() {
-            crate::log_info("reposition_window: TrayNotifyWnd not found");
             return;
         }
 
         let mut taskbar_rect = RECT::default();
         let mut tray_rect = RECT::default();
 
-        if GetWindowRect(h_taskbar, &mut taskbar_rect).is_ok() && GetWindowRect(h_tray, &mut tray_rect).is_ok() {
-            // Get DPI for the window to scale coordinates
+        if GetWindowRect(h_taskbar, &mut taskbar_rect).is_ok()
+            && GetWindowRect(h_tray, &mut tray_rect).is_ok()
+        {
             let dpi = GetDpiForWindow(hwnd);
             let scale = dpi as f32 / 96.0;
-
             let physical_width = (OVERLAY_WIDTH as f32 * scale) as i32;
             let margin = (10.0 * scale) as i32;
-
             let taskbar_height = taskbar_rect.bottom - taskbar_rect.top;
             let left = tray_rect.left - physical_width - margin;
             let top = taskbar_rect.top;
 
-            // Check if coordinates actually changed
-            let mut changed = false;
-            if left != LAST_LEFT || top != LAST_TOP || physical_width != LAST_WIDTH || taskbar_height != LAST_HEIGHT {
-                LAST_LEFT = left;
-                LAST_TOP = top;
-                LAST_WIDTH = physical_width;
-                LAST_HEIGHT = taskbar_height;
-                changed = true;
-            }
-
-            if changed {
-                crate::log_info(&format!(
-                    "reposition_window: positioning overlay to left={}, top={}, width={}, height={}, dpi={}",
-                    left, top, physical_width, taskbar_height, dpi
-                ));
-
-                // Force topmost Z-order to overlay properly on the taskbar without SWP_NOZORDER
-                SetWindowPos(
-                    hwnd,
-                    HWND_TOPMOST,
-                    left,
-                    top,
-                    physical_width,
-                    taskbar_height,
-                    SWP_NOACTIVATE,
-                ).ok();
-            }
-        } else {
-            crate::log_info("reposition_window: GetWindowRect failed");
+            // Always reassert position AND topmost Z-order so the overlay never gets
+            // permanently buried behind the taskbar or shell notification windows.
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                left,
+                top,
+                physical_width,
+                taskbar_height,
+                SWP_NOACTIVATE,
+            ).ok();
         }
     }
 }
