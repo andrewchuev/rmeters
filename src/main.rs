@@ -3,7 +3,7 @@
 mod config;
 mod metrics;
 mod renderer;
-mod tray;
+mod settings;
 mod window;
 
 use std::fs::OpenOptions;

@@ -4,12 +4,12 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM, COLORREF};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, FindWindowExW, FindWindowW, GetWindowRect, MessageBoxW,
-    RegisterClassW, RegisterWindowMessageW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW,
-    HMENU, MB_ICONINFORMATION, MB_OK, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
-    SetLayeredWindowAttributes, LWA_COLORKEY, DestroyWindow, SetTimer, KillTimer, HWND_TOPMOST,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GetWindowRect,
+    KillTimer, RegisterClassW, RegisterWindowMessageW, SetLayeredWindowAttributes, SetTimer,
+    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU, HWND_TOPMOST, LWA_COLORKEY,
+    SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+    WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::Win32::Graphics::Gdi::HBRUSH;
 
@@ -18,7 +18,6 @@ static WM_TASKBAR_CREATED: Lazy<u32> = Lazy::new(|| unsafe {
 });
 
 use crate::renderer::Renderer;
-use crate::tray::{ID_EXIT, ID_SHOW_PER_CORE, ID_AUTOSTART, ID_SETTINGS, show_context_menu};
 
 pub const OVERLAY_WIDTH: i32 = 140;
 
@@ -53,32 +52,13 @@ pub unsafe extern "system" fn window_proc(
             LRESULT(1)
         }
         WM_RBUTTONUP => {
-            show_context_menu(hwnd);
-            LRESULT(0)
-        }
-        WM_COMMAND => {
-            let id = wparam.0 & 0xffff;
-            if id == ID_EXIT {
-                let _ = DestroyWindow(hwnd);
-            } else if id == ID_SETTINGS {
-                MessageBoxW(hwnd, windows::core::w!("Settings coming soon."), windows::core::w!("RMeters — Settings"), MB_OK | MB_ICONINFORMATION);
-            } else if id == ID_SHOW_PER_CORE {
-                let show_per_core = crate::config::SHOW_PER_CORE.load(std::sync::atomic::Ordering::Relaxed);
-                crate::config::SHOW_PER_CORE.store(!show_per_core, std::sync::atomic::Ordering::Relaxed);
-                crate::config::save_config();
-                
-                // Force immediate repaint
-                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(hwnd, None, false);
-            } else if id == ID_AUTOSTART {
-                let autostart_enabled = crate::config::AUTOSTART_ENABLED.load(std::sync::atomic::Ordering::Relaxed);
-                let new_val = !autostart_enabled;
-                if crate::config::set_autostart(new_val).is_ok() {
-                    crate::config::AUTOSTART_ENABLED.store(new_val, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
+            crate::settings::show_settings(hwnd);
             LRESULT(0)
         }
         WM_DESTROY => {
+            if let Some(s) = crate::settings::get_settings_hwnd() {
+                let _ = DestroyWindow(s);
+            }
             let _ = KillTimer(hwnd, 1);
             let _ = KillTimer(hwnd, 2);
             windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
