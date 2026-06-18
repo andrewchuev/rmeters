@@ -1,9 +1,10 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::fs;
 use std::path::PathBuf;
 
 pub static SHOW_PER_CORE: AtomicBool = AtomicBool::new(false);
 pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
+pub static OVERLAY_X: AtomicI32 = AtomicI32::new(-1);
 
 fn config_path() -> PathBuf {
     let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
@@ -12,16 +13,20 @@ fn config_path() -> PathBuf {
 
 pub fn load_config() {
     if let Ok(content) = fs::read_to_string(config_path()) {
-        let show = content
-            .lines()
-            .find_map(|line| {
+        let parse = |key_name: &str| -> Option<&str> {
+            content.lines().find_map(|line| {
                 let mut parts = line.splitn(2, ':');
                 let key = parts.next()?.trim();
                 let val = parts.next()?.trim();
-                if key == "show_per_core" { Some(val == "true") } else { None }
+                if key == key_name { Some(val) } else { None }
             })
-            .unwrap_or(false);
+        };
+
+        let show = parse("show_per_core").map(|v| v == "true").unwrap_or(false);
         SHOW_PER_CORE.store(show, Ordering::Relaxed);
+
+        let x = parse("overlay_x").and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
+        OVERLAY_X.store(x, Ordering::Relaxed);
     }
 
     // Sync autostart status with Windows Registry
@@ -33,8 +38,12 @@ pub fn save_config() {
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let val = SHOW_PER_CORE.load(Ordering::Relaxed);
-    let _ = fs::write(path, format!("show_per_core: {}\n", val));
+    let per_core = SHOW_PER_CORE.load(Ordering::Relaxed);
+    let overlay_x = OVERLAY_X.load(Ordering::Relaxed);
+    let _ = fs::write(path, format!(
+        "show_per_core: {}\noverlay_x: {}\n",
+        per_core, overlay_x
+    ));
 }
 
 pub fn is_autostart_enabled() -> bool {

@@ -8,7 +8,10 @@ mod window;
 
 use std::fs::OpenOptions;
 use std::io::Write;
+use windows::core::w;
+use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, TranslateMessage, DispatchMessageW, MSG, WM_CLOSE,
@@ -56,8 +59,15 @@ pub fn log_info(msg: &str) {
 fn main() -> windows::core::Result<()> {
     // Clear log file at start
     std::fs::write("D:\\Projects\\internal\\rmeters\\run_log.txt", "").ok();
-    
+
     log_info("rmeters starting... ");
+
+    // Ensure only one instance is running
+    let _mutex = unsafe { CreateMutexW(None, true, w!("Global\\rmeters_single_instance")) };
+    if unsafe { windows::Win32::Foundation::GetLastError() } == ERROR_ALREADY_EXISTS {
+        log_info("Another instance is already running, exiting.");
+        return Ok(());
+    }
 
     // Register console control handler to handle Ctrl+C
     unsafe {
