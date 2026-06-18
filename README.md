@@ -2,6 +2,8 @@
 
 A lightweight, high-performance system monitor overlay for the Windows 11 taskbar, written in Rust. It provides real-time CPU and RAM load indicators positioned neatly on your taskbar, mimicking the look and feel of the classic xMeters utility.
 
+👉 **[Download Latest Release](https://github.com/andrewchuev/rmeters/releases/latest)**
+
 ![rmeters App Icon](app_icon.png)
 
 ## Features
