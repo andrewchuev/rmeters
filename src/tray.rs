@@ -5,7 +5,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, GetCursorPos, LoadIconW, PostMessageW, SetForegroundWindow,
-    TrackPopupMenu, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_NULL,
+    TrackPopupMenu, MF_STRING, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_NULL,
 };
 
 pub const WM_TRAY_ICON: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1;
@@ -73,7 +73,7 @@ pub fn show_tray_menu(hwnd: HWND) {
 
         let _ = TrackPopupMenu(
             hmenu,
-            TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+            TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
             pt.x,
             pt.y,
             0,

@@ -29,18 +29,38 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Package release asset
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
         shell: pwsh
         run: |
           mkdir dist
+          $version = if ($env:GITHUB_REF -match '^refs/tags/v(.+)$') { $Matches[1] } else { "0.1.0" }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
           Copy-Item "target/release/rmeters.exe" -Destination "dist/"
           Copy-Item "README.md" -Destination "dist/"
-          Compress-Archive -Path dist/* -DestinationPath rmeters-windows-x64.zip
+          Compress-Archive -Path "dist/rmeters.exe", "dist/README.md" -DestinationPath "dist/rmeters-windows-x64-portable.zip"
 
-      - name: Create Release and Upload Asset
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmeters-build
+          path: |
+            dist/rmeters-setup.exe
+            dist/rmeters-windows-x64-portable.zip
+
+      - name: Create Release and Upload Assets
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: rmeters-windows-x64.zip
+          files: |
+            dist/rmeters-setup.exe
+            dist/rmeters-windows-x64-portable.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
