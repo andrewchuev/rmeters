@@ -4,13 +4,12 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM, COLORREF};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, FindWindowExW, FindWindowW, GetWindowRect, RegisterClassW,
-    RegisterWindowMessageW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SW_SHOW, WM_DESTROY, WM_PAINT, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, SetLayeredWindowAttributes, LWA_COLORKEY,
-    WM_COMMAND, WM_CREATE, WM_TIMER, WM_RBUTTONUP, WM_CONTEXTMENU, DestroyWindow, SetTimer,
-    KillTimer, HWND_TOPMOST, WS_EX_NOACTIVATE, WM_ERASEBKGND,
+    CreateWindowExW, DefWindowProcW, FindWindowExW, FindWindowW, GetWindowRect, MessageBoxW,
+    RegisterClassW, RegisterWindowMessageW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW,
+    HMENU, MB_ICONINFORMATION, MB_OK, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT, WM_RBUTTONUP, WM_TIMER,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SetLayeredWindowAttributes, LWA_COLORKEY, DestroyWindow, SetTimer, KillTimer, HWND_TOPMOST,
 };
 use windows::Win32::Graphics::Gdi::HBRUSH;
 
@@ -19,7 +18,7 @@ static WM_TASKBAR_CREATED: Lazy<u32> = Lazy::new(|| unsafe {
 });
 
 use crate::renderer::Renderer;
-use crate::tray::{WM_TRAY_ICON, ID_EXIT, ID_SHOW_PER_CORE, ID_AUTOSTART, show_tray_menu};
+use crate::tray::{ID_EXIT, ID_SHOW_PER_CORE, ID_AUTOSTART, ID_SETTINGS, show_context_menu};
 
 pub const OVERLAY_WIDTH: i32 = 140;
 
@@ -53,17 +52,16 @@ pub unsafe extern "system" fn window_proc(
         WM_ERASEBKGND => {
             LRESULT(1)
         }
-        WM_TRAY_ICON => {
-            let event = lparam.0 as u32;
-            if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
-                show_tray_menu(hwnd);
-            }
+        WM_RBUTTONUP => {
+            show_context_menu(hwnd);
             LRESULT(0)
         }
         WM_COMMAND => {
             let id = wparam.0 & 0xffff;
             if id == ID_EXIT {
                 let _ = DestroyWindow(hwnd);
+            } else if id == ID_SETTINGS {
+                MessageBoxW(hwnd, windows::core::w!("Settings coming soon."), windows::core::w!("RMeters — Settings"), MB_OK | MB_ICONINFORMATION);
             } else if id == ID_SHOW_PER_CORE {
                 let show_per_core = crate::config::SHOW_PER_CORE.load(std::sync::atomic::Ordering::Relaxed);
                 crate::config::SHOW_PER_CORE.store(!show_per_core, std::sync::atomic::Ordering::Relaxed);
@@ -83,7 +81,6 @@ pub unsafe extern "system" fn window_proc(
         WM_DESTROY => {
             let _ = KillTimer(hwnd, 1);
             let _ = KillTimer(hwnd, 2);
-            crate::tray::remove_tray_icon(hwnd);
             windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
             LRESULT(0)
         }
@@ -121,7 +118,7 @@ pub fn create_overlay() -> HWND {
         crate::log_info(&format!("create_overlay: Found taskbar handle = {:?}", h_taskbar.0));
 
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             class_name,
             w!("rmeters_overlay"),
             WS_POPUP,

@@ -96,11 +96,7 @@ fn main() -> windows::core::Result<()> {
         }
     }
 
-    // 6. Register the system tray icon
-    tray::add_tray_icon(hwnd);
-    log_info("Tray icon registered");
-
-    // 7. Main message loop
+    // 6. Main message loop
     log_info("Entering message loop...");
     unsafe {
         let mut msg = MSG::default();
