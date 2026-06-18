@@ -1,29 +1,40 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
+use std::path::PathBuf;
 
 pub static SHOW_PER_CORE: AtomicBool = AtomicBool::new(false);
 pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
 
-const CONFIG_PATH: &str = "D:\\Projects\\internal\\rmeters\\config.txt";
+fn config_path() -> PathBuf {
+    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+    PathBuf::from(base).join("rmeters").join("config.txt")
+}
 
 pub fn load_config() {
-    if let Ok(content) = fs::read_to_string(CONFIG_PATH) {
-        let trimmed = content.trim();
-        if trimmed == "show_per_core: true" {
-            SHOW_PER_CORE.store(true, Ordering::Relaxed);
-        } else {
-            SHOW_PER_CORE.store(false, Ordering::Relaxed);
-        }
+    if let Ok(content) = fs::read_to_string(config_path()) {
+        let show = content
+            .lines()
+            .find_map(|line| {
+                let mut parts = line.splitn(2, ':');
+                let key = parts.next()?.trim();
+                let val = parts.next()?.trim();
+                if key == "show_per_core" { Some(val == "true") } else { None }
+            })
+            .unwrap_or(false);
+        SHOW_PER_CORE.store(show, Ordering::Relaxed);
     }
-    
+
     // Sync autostart status with Windows Registry
     AUTOSTART_ENABLED.store(is_autostart_enabled(), Ordering::Relaxed);
 }
 
 pub fn save_config() {
+    let path = config_path();
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
     let val = SHOW_PER_CORE.load(Ordering::Relaxed);
-    let content = format!("show_per_core: {}", val);
-    let _ = fs::write(CONFIG_PATH, content);
+    let _ = fs::write(path, format!("show_per_core: {}\n", val));
 }
 
 pub fn is_autostart_enabled() -> bool {
