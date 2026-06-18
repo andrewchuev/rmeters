@@ -1,17 +1,22 @@
+use std::mem::size_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH, GetStockObject, DEFAULT_GUI_FONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::{
+    ICC_LINK_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMLINK, NMHDR, NM_CLICK,
+};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW,
-    DestroyWindow, GetSystemMetrics, GetWindowLongPtrW, GWLP_USERDATA, HMENU,
-    RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    ShowWindow, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WNDCLASSW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_SETFONT,
-    WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_GROUPBOX, BS_PUSHBUTTON,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GetSystemMetrics, GetWindowLongPtrW, GWLP_USERDATA, HMENU, RegisterClassW,
+    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SETFONT, WS_CAPTION, WS_CHILD,
+    WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
 const IDC_CHK_PER_CORE: usize = 2001;
@@ -19,6 +24,10 @@ const IDC_CHK_AUTOSTART: usize = 2002;
 const IDC_BTN_EXIT: usize = 2003;
 
 static SETTINGS_HWND: AtomicIsize = AtomicIsize::new(0);
+
+fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
 
 pub fn get_settings_hwnd() -> Option<HWND> {
     let raw = SETTINGS_HWND.load(Ordering::Relaxed);
@@ -39,10 +48,18 @@ pub unsafe extern "system" fn settings_wnd_proc(
             let show_per_core = crate::config::SHOW_PER_CORE.load(Ordering::Relaxed);
             let autostart    = crate::config::AUTOSTART_ENABLED.load(Ordering::Relaxed);
 
+            // ── Group: Options ────────────────────────────────────────────
+            let grp_opts = CreateWindowExW(
+                WINDOW_EX_STYLE(0), w!("BUTTON"), w!("Options"),
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+                8, 4, 248, 80, hwnd, HMENU(null_mut()), instance, None,
+            ).unwrap();
+            SendMessageW(grp_opts, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+
             let chk1 = CreateWindowExW(
                 WINDOW_EX_STYLE(0), w!("BUTTON"), w!("Show CPU per Core"),
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-                16, 16, 232, 24, hwnd, HMENU(IDC_CHK_PER_CORE as *mut _), instance, None,
+                20, 22, 224, 22, hwnd, HMENU(IDC_CHK_PER_CORE as *mut _), instance, None,
             ).unwrap();
             SendMessageW(chk1, BM_SETCHECK, WPARAM(if show_per_core { 1 } else { 0 }), LPARAM(0));
             SendMessageW(chk1, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
@@ -50,19 +67,67 @@ pub unsafe extern "system" fn settings_wnd_proc(
             let chk2 = CreateWindowExW(
                 WINDOW_EX_STYLE(0), w!("BUTTON"), w!("Start with Windows"),
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-                16, 48, 232, 24, hwnd, HMENU(IDC_CHK_AUTOSTART as *mut _), instance, None,
+                20, 50, 224, 22, hwnd, HMENU(IDC_CHK_AUTOSTART as *mut _), instance, None,
             ).unwrap();
             SendMessageW(chk2, BM_SETCHECK, WPARAM(if autostart { 1 } else { 0 }), LPARAM(0));
             SendMessageW(chk2, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
 
-            let btn = CreateWindowExW(
+            // ── Group: About ──────────────────────────────────────────────
+            let grp_about = CreateWindowExW(
+                WINDOW_EX_STYLE(0), w!("BUTTON"), w!("About"),
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+                8, 90, 248, 106, hwnd, HMENU(null_mut()), instance, None,
+            ).unwrap();
+            SendMessageW(grp_about, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+
+            // App name + version (built at compile time)
+            let version_text = to_wide(
+                &format!("RMeters  v{}", env!("CARGO_PKG_VERSION"))
+            );
+            let lbl_ver = CreateWindowExW(
+                WINDOW_EX_STYLE(0), w!("STATIC"), w!(""),
+                WS_CHILD | WS_VISIBLE,
+                20, 110, 224, 18, hwnd, HMENU(null_mut()), instance, None,
+            ).unwrap();
+            let _ = SetWindowTextW(lbl_ver, PCWSTR(version_text.as_ptr()));
+            SendMessageW(lbl_ver, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+
+            // Website (SysLink)
+            let lnk_url = CreateWindowExW(
+                WINDOW_EX_STYLE(0), w!("SysLink"),
+                w!("<a href=\"https://rmeters.reslab.pro\">rmeters.reslab.pro</a>"),
+                WS_CHILD | WS_VISIBLE,
+                20, 132, 224, 18, hwnd, HMENU(null_mut()), instance, None,
+            ).unwrap();
+            SendMessageW(lnk_url, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+
+            // Email (SysLink)
+            let lnk_email = CreateWindowExW(
+                WINDOW_EX_STYLE(0), w!("SysLink"),
+                w!("<a href=\"mailto:andrew.chuev@gmail.com\">andrew.chuev@gmail.com</a>"),
+                WS_CHILD | WS_VISIBLE,
+                20, 154, 224, 18, hwnd, HMENU(null_mut()), instance, None,
+            ).unwrap();
+            SendMessageW(lnk_email, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+
+            // ── Exit button ───────────────────────────────────────────────
+            let btn_exit = CreateWindowExW(
                 WINDOW_EX_STYLE(0), w!("BUTTON"), w!("Exit RMeters"),
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-                128, 100, 120, 28, hwnd, HMENU(IDC_BTN_EXIT as *mut _), instance, None,
+                148, 206, 108, 26, hwnd, HMENU(IDC_BTN_EXIT as *mut _), instance, None,
             ).unwrap();
-            SendMessageW(btn, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+            SendMessageW(btn_exit, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
 
             SETTINGS_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
+            LRESULT(0)
+        }
+        WM_NOTIFY => {
+            let nmhdr = &*(lparam.0 as *const NMHDR);
+            if nmhdr.code == NM_CLICK {
+                let nml = &*(lparam.0 as *const NMLINK);
+                let url = PCWSTR(nml.item.szUrl.as_ptr());
+                ShellExecuteW(HWND(null_mut()), w!("open"), url, PCWSTR::null(), PCWSTR::null(), SW_SHOW);
+            }
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -109,11 +174,17 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
 pub fn show_settings(overlay_hwnd: HWND) {
     unsafe {
-        // If already open, bring to front instead of creating a second instance
         if let Some(existing) = get_settings_hwnd() {
             let _ = SetForegroundWindow(existing);
             return;
         }
+
+        // Enable the SysLink common control class
+        let icc = INITCOMMONCONTROLSEX {
+            dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_LINK_CLASS,
+        };
+        let _ = InitCommonControlsEx(&icc);
 
         let instance = GetModuleHandleW(None).unwrap();
         let class_name = w!("rmeters_settings");
@@ -126,10 +197,10 @@ pub fn show_settings(overlay_hwnd: HWND) {
             hbrBackground: HBRUSH((COLOR_WINDOW.0 as isize + 1) as *mut _),
             ..Default::default()
         };
-        RegisterClassW(&wc); // ignore error if class already registered
+        RegisterClassW(&wc);
 
-        let win_w = 264i32;
-        let win_h = 160i32;
+        let win_w = 280i32;
+        let win_h = 268i32;
         let x = (GetSystemMetrics(SM_CXSCREEN) - win_w) / 2;
         let y = (GetSystemMetrics(SM_CYSCREEN) - win_h) / 2;
 
