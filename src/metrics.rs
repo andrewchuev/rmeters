@@ -1,18 +1,21 @@
-use std::sync::RwLock;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::{LazyLock, RwLock};
 use std::thread;
 use std::time::Duration;
 use sysinfo::System;
-use once_cell::sync::Lazy;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::InvalidateRect;
+
+pub const HISTORY_LEN: usize = 60;
 
 pub struct MetricsState {
     pub cpu_usage: f32,
     pub ram_usage_pct: f32,
     pub ram_used_gb: f32,
     pub ram_total_gb: f32,
-    pub cpu_history: Vec<f32>,
-    pub ram_history: Vec<f32>,
+    pub cpu_history: VecDeque<f32>,
+    pub ram_history: VecDeque<f32>,
     pub cpu_cores_usage: Vec<f32>,
 }
 
@@ -23,31 +26,36 @@ impl MetricsState {
             ram_usage_pct: 0.0,
             ram_used_gb: 0.0,
             ram_total_gb: 0.0,
-            cpu_history: vec![0.0; 60],
-            ram_history: vec![0.0; 60],
+            cpu_history: VecDeque::from(vec![0.0f32; HISTORY_LEN]),
+            ram_history: VecDeque::from(vec![0.0f32; HISTORY_LEN]),
             cpu_cores_usage: Vec::new(),
         }
     }
 
     fn push_cpu(&mut self, val: f32) {
-        self.cpu_history.remove(0);
-        self.cpu_history.push(val);
+        self.cpu_history.pop_front();
+        self.cpu_history.push_back(val);
     }
 
     fn push_ram(&mut self, val: f32) {
-        self.ram_history.remove(0);
-        self.ram_history.push(val);
+        self.ram_history.pop_front();
+        self.ram_history.push_back(val);
     }
 }
 
-pub static METRICS: Lazy<RwLock<MetricsState>> = Lazy::new(|| RwLock::new(MetricsState::new()));
-pub static OVERLAY_HWND: Lazy<RwLock<Option<isize>>> = Lazy::new(|| RwLock::new(None));
+pub static METRICS: LazyLock<RwLock<MetricsState>> =
+    LazyLock::new(|| RwLock::new(MetricsState::new()));
 
+/// Stores the raw HWND value of the overlay window. 0 means not yet set.
+pub static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Starts the background thread that polls system metrics once per second
+/// and invalidates the overlay window to trigger a repaint.
 pub fn start_monitoring() {
     thread::spawn(|| {
         let mut sys = System::new_all();
 
-        // First refresh to initialize CPU values (they will be 0 on first call)
+        // First refresh to prime CPU values (they return 0 on the very first call)
         sys.refresh_cpu_usage();
         sys.refresh_memory();
         thread::sleep(Duration::from_millis(500));
@@ -57,7 +65,7 @@ pub fn start_monitoring() {
             sys.refresh_memory();
 
             let cpu = sys.global_cpu_info().cpu_usage();
-            
+
             let total_mem = sys.total_memory() as f32;
             let used_mem = sys.used_memory() as f32;
             let ram_pct = if total_mem > 0.0 {
@@ -72,20 +80,26 @@ pub fn start_monitoring() {
             let cpu_cores_usage: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
 
             {
-                if let Ok(mut state) = METRICS.write() {
-                    state.cpu_usage = cpu;
-                    state.ram_usage_pct = ram_pct;
-                    state.ram_used_gb = ram_used_gb;
-                    state.ram_total_gb = ram_total_gb;
-                    state.push_cpu(cpu);
-                    state.push_ram(ram_pct);
-                    state.cpu_cores_usage = cpu_cores_usage;
-                }
+                let mut state = match METRICS.write() {
+                    Ok(g) => g,
+                    // Recover from a poisoned lock so the monitoring thread stays alive.
+                    Err(p) => p.into_inner(),
+                };
+                state.cpu_usage = cpu;
+                state.ram_usage_pct = ram_pct;
+                state.ram_used_gb = ram_used_gb;
+                state.ram_total_gb = ram_total_gb;
+                state.push_cpu(cpu);
+                state.push_ram(ram_pct);
+                state.cpu_cores_usage = cpu_cores_usage;
             }
 
-            // Invalidate the overlay window to trigger redraw
-            let hwnd_raw = { *OVERLAY_HWND.read().unwrap() };
-            if let Some(raw) = hwnd_raw {
+            let raw = OVERLAY_HWND.load(Ordering::Relaxed);
+            if raw != 0 {
+                // SAFETY: raw is a valid HWND stored by the main thread in main.rs.
+                // It remains valid for the lifetime of the overlay window, which
+                // outlives this background thread (WM_DESTROY posts WM_QUIT before
+                // the process exits).
                 let hwnd = HWND(raw as *mut std::ffi::c_void);
                 unsafe {
                     let _ = InvalidateRect(hwnd, None, false);

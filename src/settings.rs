@@ -1,3 +1,7 @@
+// Win32 UI code uses many size_of::<T>() as u32 and DPI f32→i32 conversions
+// that are always in range. Allow the lint rather than adding try_from noise.
+#![allow(clippy::cast_possible_truncation, clippy::zero_ptr)]
+
 use std::mem::size_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -50,6 +54,12 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Scales a logical pixel value to physical pixels using the window's DPI.
+fn dpi_scale(v: i32, dpi: u32) -> i32 {
+    (v as f32 * dpi as f32 / 96.0) as i32
+}
+
+/// Returns the current settings window handle, or None if it is not open.
 pub fn get_settings_hwnd() -> Option<HWND> {
     let raw = SETTINGS_HWND.load(Ordering::Relaxed);
     if raw != 0 { Some(HWND(raw as *mut _)) } else { None }
@@ -70,6 +80,8 @@ pub unsafe extern "system" fn settings_wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_CREATE => {
+            // SAFETY: lparam for WM_CREATE is always a pointer to CREATESTRUCTW
+            // as specified by the Win32 API contract.
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
 
@@ -86,11 +98,16 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
             );
             let hfont = CreateFontIndirectW(&ncm.lfMessageFont);
-            SETTINGS_FONT.store(hfont.0 as isize, Ordering::Relaxed);
-            let fwp = WPARAM(hfont.0 as usize);
 
+            // Delete any previously stored font before overwriting the slot,
+            // in case the settings window is opened more than once per session.
+            let old_font = SETTINGS_FONT.swap(hfont.0 as isize, Ordering::Relaxed);
+            if old_font != 0 {
+                let _ = DeleteObject(HGDIOBJ(old_font as *mut _));
+            }
+
+            let fwp = WPARAM(hfont.0 as usize);
             let dpi = GetDpiForWindow(hwnd);
-            let sc = |v: i32| -> i32 { (v as f32 * dpi as f32 / 96.0) as i32 };
 
             let show_per_core = crate::config::SHOW_PER_CORE.load(Ordering::Relaxed);
             let autostart     = crate::config::AUTOSTART_ENABLED.load(Ordering::Relaxed);
@@ -99,7 +116,8 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 ($class:expr, $text:expr, $style:expr, $x:expr, $y:expr, $w:expr, $h:expr, $id:expr) => {{
                     CreateWindowExW(WINDOW_EX_STYLE(0), $class, $text,
                         WS_CHILD | WS_VISIBLE | WINDOW_STYLE($style),
-                        sc($x), sc($y), sc($w), sc($h),
+                        dpi_scale($x, dpi), dpi_scale($y, dpi),
+                        dpi_scale($w, dpi), dpi_scale($h, dpi),
                         hwnd, HMENU($id as *mut _), hmod, None)
                 }};
             }
@@ -172,16 +190,14 @@ pub unsafe extern "system" fn settings_wnd_proc(
             let hdc = BeginPaint(hwnd, &mut ps);
 
             let dpi = GetDpiForWindow(hwnd);
-            let sc = |v: i32| -> i32 { (v as f32 * dpi as f32 / 96.0) as i32 };
-
             let mut rc = RECT::default();
             let _ = GetClientRect(hwnd, &mut rc);
-            let x1 = sc(16);
-            let x2 = rc.right - sc(16);
+            let x1 = dpi_scale(16, dpi);
+            let x2 = rc.right - dpi_scale(16, dpi);
 
             let pen = CreatePen(PS_SOLID, 1, COLORREF(COLOR_SEP));
             let old = SelectObject(hdc, HGDIOBJ(pen.0));
-            for y in [sc(40), sc(124), sc(202)] {
+            for y in [dpi_scale(40, dpi), dpi_scale(124, dpi), dpi_scale(202, dpi)] {
                 let _ = MoveToEx(hdc, x1, y, None);
                 let _ = LineTo(hdc, x2, y);
             }
@@ -216,8 +232,10 @@ pub unsafe extern "system" fn settings_wnd_proc(
         }
 
         WM_NOTIFY => {
+            // SAFETY: lparam for WM_NOTIFY is always a pointer to NMHDR as per Win32 contract.
             let nmhdr = &*(lparam.0 as *const NMHDR);
             if nmhdr.code == NM_CLICK {
+                // SAFETY: NM_CLICK from a SysLink control guarantees lparam points to NMLINK.
                 let nml = &*(lparam.0 as *const NMLINK);
                 let url = PCWSTR(nml.item.szUrl.as_ptr());
                 ShellExecuteW(HWND(null_mut()), w!("open"), url,
@@ -242,8 +260,13 @@ pub unsafe extern "system" fn settings_wnd_proc(
                     }
                     IDC_CHK_AUTOSTART => {
                         let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
-                        if crate::config::set_autostart(checked).is_ok() {
-                            crate::config::AUTOSTART_ENABLED.store(checked, Ordering::Relaxed);
+                        match crate::config::set_autostart(checked) {
+                            Ok(()) => {
+                                crate::config::AUTOSTART_ENABLED.store(checked, Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                crate::log_info(&format!("set_autostart failed: {e}"));
+                            }
                         }
                     }
                     IDC_BTN_EXIT => {
@@ -263,16 +286,26 @@ pub unsafe extern "system" fn settings_wnd_proc(
         WM_CLOSE   => { let _ = DestroyWindow(hwnd); LRESULT(0) }
         WM_DESTROY => {
             SETTINGS_HWND.store(0, Ordering::Relaxed);
-            let raw = SETTINGS_FONT.swap(0, Ordering::Relaxed);
-            if raw != 0 {
-                let _ = DeleteObject(HGDIOBJ(raw as *mut _));
+
+            let font_raw = SETTINGS_FONT.swap(0, Ordering::Relaxed);
+            if font_raw != 0 {
+                let _ = DeleteObject(HGDIOBJ(font_raw as *mut _));
             }
+
+            // Release the cached background brush created in dark_brush().
+            let brush_raw = DARK_BG_BRUSH.swap(0, Ordering::Relaxed);
+            if brush_raw != 0 {
+                let _ = DeleteObject(HGDIOBJ(brush_raw as *mut _));
+            }
+
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
+/// Opens the settings window centered on the monitor containing the overlay.
+/// If the window is already open, brings it to the foreground instead.
 pub fn show_settings(overlay_hwnd: HWND) {
     unsafe {
         if let Some(existing) = get_settings_hwnd() {

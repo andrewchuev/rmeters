@@ -12,6 +12,13 @@ fn config_path() -> PathBuf {
     PathBuf::from(base).join("rmeters").join("config.txt")
 }
 
+/// Returns the directory used for all rmeters data files (config, log).
+pub fn data_dir() -> PathBuf {
+    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+    PathBuf::from(base).join("rmeters")
+}
+
+/// Loads configuration from %APPDATA%\rmeters\config.txt.
 pub fn load_config() {
     if let Ok(content) = fs::read_to_string(config_path()) {
         let parse = |key_name: &str| -> Option<&str> {
@@ -33,24 +40,31 @@ pub fn load_config() {
         OVERLAY_Y.store(y, Ordering::Relaxed);
     }
 
-    // Sync autostart status with Windows Registry
+    // Sync autostart status with the Windows Registry.
     AUTOSTART_ENABLED.store(is_autostart_enabled(), Ordering::Relaxed);
 }
 
+/// Persists current configuration to %APPDATA%\rmeters\config.txt.
 pub fn save_config() {
     let path = config_path();
     if let Some(dir) = path.parent() {
-        let _ = fs::create_dir_all(dir);
+        if let Err(e) = fs::create_dir_all(dir) {
+            crate::log_info(&format!("save_config: failed to create config directory: {e}"));
+            return;
+        }
     }
     let per_core = SHOW_PER_CORE.load(Ordering::Relaxed);
     let overlay_x = OVERLAY_X.load(Ordering::Relaxed);
     let overlay_y = OVERLAY_Y.load(Ordering::Relaxed);
-    let _ = fs::write(path, format!(
-        "show_per_core: {}\noverlay_x: {}\noverlay_y: {}\n",
-        per_core, overlay_x, overlay_y
-    ));
+    if let Err(e) = fs::write(
+        path,
+        format!("show_per_core: {per_core}\noverlay_x: {overlay_x}\noverlay_y: {overlay_y}\n"),
+    ) {
+        crate::log_info(&format!("save_config: write failed: {e}"));
+    }
 }
 
+/// Returns true if the rmeters autostart registry value is present.
 pub fn is_autostart_enabled() -> bool {
     use windows::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER,
@@ -63,33 +77,20 @@ pub fn is_autostart_enabled() -> bool {
         let subkey = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
         let name = w!("rmeters");
 
-        let status = RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            subkey,
-            0,
-            KEY_QUERY_VALUE,
-            &mut hkey,
-        );
-
-        if status.is_ok() {
-            let mut cb_data = 0;
-            // First call to get the buffer size (checking if value exists)
-            let status_query = RegQueryValueExW(
-                hkey,
-                name,
-                None,
-                None,
-                None,
-                Some(&mut cb_data),
-            );
-            let _ = RegCloseKey(hkey);
-            status_query.is_ok()
-        } else {
-            false
+        let status = RegOpenKeyExW(HKEY_CURRENT_USER, subkey, 0, KEY_QUERY_VALUE, &mut hkey);
+        if status.is_err() {
+            return false;
         }
+
+        let mut cb_data = 0;
+        let status_query = RegQueryValueExW(hkey, name, None, None, None, Some(&mut cb_data));
+        let _ = RegCloseKey(hkey);
+        status_query.is_ok()
     }
 }
 
+/// Adds or removes the rmeters autostart registry value.
+/// Returns `Err` if the registry key cannot be opened or the value cannot be written.
 pub fn set_autostart(enable: bool) -> Result<(), std::io::Error> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::System::Registry::{
@@ -100,8 +101,6 @@ pub fn set_autostart(enable: bool) -> Result<(), std::io::Error> {
 
     let path = std::env::current_exe()?;
     let path_str = path.to_string_lossy();
-    
-    // Format command line, e.g. "C:\path\to\rmeters.exe"
     let cmd = format!("\"{}\"", path_str);
     let cmd_wide: Vec<u16> = std::ffi::OsStr::new(&cmd).encode_wide().chain(Some(0)).collect();
 
@@ -110,32 +109,30 @@ pub fn set_autostart(enable: bool) -> Result<(), std::io::Error> {
         let subkey = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
         let name = w!("rmeters");
 
-        let status = RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            subkey,
-            0,
-            KEY_SET_VALUE,
-            &mut hkey,
-        );
-
-        if status.is_ok() {
-            if enable {
-                let _ = RegSetValueExW(
-                    hkey,
-                    name,
-                    0,
-                    REG_SZ,
-                    Some(std::slice::from_raw_parts(
-                        cmd_wide.as_ptr() as *const u8,
-                        cmd_wide.len() * 2,
-                    )),
-                );
-            } else {
-                let _ = RegDeleteValueW(hkey, name);
-            }
-            let _ = RegCloseKey(hkey);
+        let status = RegOpenKeyExW(HKEY_CURRENT_USER, subkey, 0, KEY_SET_VALUE, &mut hkey);
+        if status.is_err() {
+            return Err(std::io::Error::last_os_error());
         }
-    }
 
-    Ok(())
+        let write_result = if enable {
+            RegSetValueExW(
+                hkey,
+                name,
+                0,
+                REG_SZ,
+                Some(
+                    // SAFETY: cmd_wide is a valid Vec<u16> with a null terminator.
+                    // Reinterpreting its contents as a &[u8] byte slice with
+                    // byte length = element_count * 2 is correct for UTF-16 LE data.
+                    std::slice::from_raw_parts(cmd_wide.as_ptr() as *const u8, cmd_wide.len() * 2),
+                ),
+            )
+        } else {
+            RegDeleteValueW(hkey, name)
+        };
+
+        let _ = RegCloseKey(hkey);
+
+        write_result.ok().map_err(|_| std::io::Error::last_os_error())
+    }
 }

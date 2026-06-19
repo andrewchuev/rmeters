@@ -167,7 +167,6 @@ name = "rmeters"
 version = "0.1.5"
 dependencies = [
  "embed-resource",
- "once_cell",
  "sysinfo",
  "windows 0.58.0",
 ]
