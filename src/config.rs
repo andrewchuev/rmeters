@@ -5,7 +5,6 @@ use std::path::PathBuf;
 pub static SHOW_PER_CORE: AtomicBool = AtomicBool::new(false);
 pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
 pub static OVERLAY_X: AtomicI32 = AtomicI32::new(-1);
-pub static OVERLAY_Y: AtomicI32 = AtomicI32::new(-1);
 
 fn config_path() -> PathBuf {
     let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
@@ -35,9 +34,6 @@ pub fn load_config() {
 
         let x = parse("overlay_x").and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
         OVERLAY_X.store(x, Ordering::Relaxed);
-
-        let y = parse("overlay_y").and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
-        OVERLAY_Y.store(y, Ordering::Relaxed);
     }
 
     // Sync autostart status with the Windows Registry.
@@ -55,10 +51,9 @@ pub fn save_config() {
     }
     let per_core = SHOW_PER_CORE.load(Ordering::Relaxed);
     let overlay_x = OVERLAY_X.load(Ordering::Relaxed);
-    let overlay_y = OVERLAY_Y.load(Ordering::Relaxed);
     if let Err(e) = fs::write(
         path,
-        format!("show_per_core: {per_core}\noverlay_x: {overlay_x}\noverlay_y: {overlay_y}\n"),
+        format!("show_per_core: {per_core}\noverlay_x: {overlay_x}\n"),
     ) {
         crate::log_info(&format!("save_config: write failed: {e}"));
     }

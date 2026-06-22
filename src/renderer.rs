@@ -184,7 +184,7 @@ impl Renderer {
 
             if show_per_core {
                 Self::draw_per_core(
-                    &rt, res, cpu, ram, &cpu_cores, lw, lh,
+                    &rt, res, cpu, ram, &cpu_cores, &ram_arr, lw, lh,
                 );
             } else {
                 Self::draw_sparklines(&rt, res, cpu, ram, &cpu_arr, &ram_arr, lh);
@@ -211,6 +211,7 @@ impl Renderer {
         cpu: f32,
         ram: f32,
         cpu_cores: &[f32],
+        ram_arr: &[f32; HISTORY_LEN],
         lw: f32,
         lh: f32,
     ) {
@@ -273,15 +274,26 @@ impl Renderer {
 
         let ram_left  = 72.0f32;
         let ram_right = 132.0f32;
-        rt.FillRectangle(
+
+        rt.DrawRectangle(
             &D2D_RECT_F { left: ram_left, top: graph_top, right: ram_right, bottom: graph_bottom },
-            &res.track_brush,
+            &res.grid_brush, 0.5, None,
         );
-        let ram_bar_h = (ram / 100.0) * graph_height;
-        rt.FillRectangle(
-            &D2D_RECT_F { left: ram_left, top: graph_bottom - ram_bar_h, right: ram_right, bottom: graph_bottom },
-            &res.ram_brush,
-        );
+
+        let ram_width_step = (ram_right - ram_left) / (HISTORY_LEN - 1) as f32;
+        for (i, pair) in ram_arr.windows(2).enumerate() {
+            let x1 = ram_left + i as f32 * ram_width_step;
+            let y1 = graph_bottom - (pair[0] / 100.0) * graph_height;
+            let x2 = ram_left + (i + 1) as f32 * ram_width_step;
+            let y2 = graph_bottom - (pair[1] / 100.0) * graph_height;
+            rt.DrawLine(
+                D2D_POINT_2F { x: x1, y: y1 },
+                D2D_POINT_2F { x: x2, y: y2 },
+                &res.ram_brush,
+                1.0,
+                None,
+            );
+        }
 
         let _ = lw; // unused in per-core layout
     }

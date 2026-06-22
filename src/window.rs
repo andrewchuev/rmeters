@@ -3,19 +3,28 @@
 
 use std::ptr::null_mut;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM, COLORREF};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GetWindowRect,
-    KillTimer, RegisterClassW, RegisterWindowMessageW, SetLayeredWindowAttributes, SetTimer,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU,
-    HWND_TOPMOST, LWA_COLORKEY, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GetForegroundWindow,
+    GetWindowRect, KillTimer, RegisterClassW, RegisterWindowMessageW, SetLayeredWindowAttributes,
+    SetTimer, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU,
+    HWND_TOPMOST, LWA_COLORKEY, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
     WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_NCHITTEST, WM_NCRBUTTONUP,
     WM_PAINT, WM_RBUTTONUP, WM_TIMER, WM_WINDOWPOSCHANGING, WINDOWPOS, WNDCLASSW,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows::Win32::Graphics::Gdi::HBRUSH;
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, HBRUSH, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::UI::Shell::{
+    SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+};
+
+/// Tracks whether the overlay is currently hidden due to a fullscreen app.
+static OVERLAY_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 use crate::renderer::Renderer;
 
@@ -38,7 +47,20 @@ pub unsafe extern "system" fn window_proc(
         }
         WM_TIMER => {
             if wparam.0 == 1 {
-                reposition_window(hwnd);
+                let fullscreen = is_fullscreen_app_running();
+                let was_hidden = OVERLAY_HIDDEN.load(Ordering::Relaxed);
+                if fullscreen {
+                    if !was_hidden {
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        OVERLAY_HIDDEN.store(true, Ordering::Relaxed);
+                    }
+                } else {
+                    if was_hidden {
+                        let _ = ShowWindow(hwnd, SW_SHOW);
+                        OVERLAY_HIDDEN.store(false, Ordering::Relaxed);
+                    }
+                    reposition_window(hwnd);
+                }
             }
             LRESULT(0)
         }
@@ -101,6 +123,53 @@ pub unsafe extern "system" fn window_proc(
     }
 }
 
+/// Returns true when a fullscreen application is running on the primary monitor.
+/// Uses SHQueryUserNotificationState for D3D/exclusive fullscreen (games, VLC, etc.)
+/// and a foreground-window rect check for browser fullscreen (YouTube, Netflix, etc.).
+fn is_fullscreen_app_running() -> bool {
+    unsafe {
+        // Fast path: OS-level fullscreen detection (D3D exclusive, presentation mode).
+        if let Ok(state) = SHQueryUserNotificationState() {
+            if state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE {
+                return true;
+            }
+        }
+
+        // Slow path: check whether the foreground window covers the entire monitor.
+        // This catches browser fullscreen (HTML5 video) which doesn't use D3D exclusively.
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+
+        // Ignore the taskbar and the desktop shell window.
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), None).unwrap_or(HWND(null_mut()));
+        let desktop = FindWindowW(w!("Progman"), None).unwrap_or(HWND(null_mut()));
+        if fg == taskbar || fg == desktop {
+            return false;
+        }
+
+        let mut fg_rect = RECT::default();
+        if GetWindowRect(fg, &mut fg_rect).is_err() {
+            return false;
+        }
+
+        let monitor = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut mi).as_bool() {
+            return false;
+        }
+
+        fg_rect.left   <= mi.rcMonitor.left
+            && fg_rect.top    <= mi.rcMonitor.top
+            && fg_rect.right  >= mi.rcMonitor.right
+            && fg_rect.bottom >= mi.rcMonitor.bottom
+    }
+}
+
 /// Creates the overlay window owned by Shell_TrayWnd and positions it on the taskbar.
 pub fn create_overlay() -> HWND {
     unsafe {
@@ -121,8 +190,10 @@ pub fn create_overlay() -> HWND {
         RegisterClassW(&wc);
 
         // Shell_TrayWnd as owner keeps our overlay above the taskbar automatically.
-        // The shell maintains the "owned window above owner" z-order invariant,
-        // so we never need to call SetWindowPos(HWND_TOPMOST) ourselves.
+        // The shell maintains the "owned window above owner" z-order invariant.
+        // The 1s timer still reasserts HWND_TOPMOST to recover from Win+D and
+        // minimize/restore animations that can temporarily drop the overlay behind
+        // other TOPMOST windows within the same z-band.
         let h_taskbar = FindWindowW(w!("Shell_TrayWnd"), None).unwrap_or(HWND(null_mut()));
 
         let hwnd = CreateWindowExW(

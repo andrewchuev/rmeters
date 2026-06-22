@@ -9,7 +9,7 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteObject, EndPaint,
-    HBRUSH, HDC, HGDIOBJ, LineTo, MoveToEx, PAINTSTRUCT, PS_SOLID,
+    FillRect, HBRUSH, HDC, HGDIOBJ, LineTo, MoveToEx, PAINTSTRUCT, PS_SOLID,
     SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ShowWindow, SPI_GETNONCLIENTMETRICS, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_NOTIFY, WM_PAINT, WM_SETFONT, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU,
+    WM_ERASEBKGND, WM_NOTIFY, WM_PAINT, WM_SETFONT, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU,
     WS_VISIBLE,
 };
 
@@ -185,6 +185,14 @@ pub unsafe extern "system" fn settings_wnd_proc(
             LRESULT(0)
         }
 
+        WM_ERASEBKGND => {
+            let hdc = HDC(wparam.0 as *mut _);
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            FillRect(hdc, &rc, dark_brush());
+            LRESULT(1)
+        }
+
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
@@ -335,7 +343,7 @@ pub fn show_settings(overlay_hwnd: HWND) {
         let dpi = GetDpiForWindow(overlay_hwnd);
         let scale = dpi as f32 / 96.0;
         let win_w = (280.0 * scale) as i32;
-        let win_h = (282.0 * scale) as i32;
+        let win_h = (300.0 * scale) as i32;
 
         let (x, y) = center_on_monitor(overlay_hwnd, win_w, win_h);
 

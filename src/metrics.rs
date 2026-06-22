@@ -12,8 +12,6 @@ pub const HISTORY_LEN: usize = 60;
 pub struct MetricsState {
     pub cpu_usage: f32,
     pub ram_usage_pct: f32,
-    pub ram_used_gb: f32,
-    pub ram_total_gb: f32,
     pub cpu_history: VecDeque<f32>,
     pub ram_history: VecDeque<f32>,
     pub cpu_cores_usage: Vec<f32>,
@@ -24,8 +22,6 @@ impl MetricsState {
         Self {
             cpu_usage: 0.0,
             ram_usage_pct: 0.0,
-            ram_used_gb: 0.0,
-            ram_total_gb: 0.0,
             cpu_history: VecDeque::from(vec![0.0f32; HISTORY_LEN]),
             ram_history: VecDeque::from(vec![0.0f32; HISTORY_LEN]),
             cpu_cores_usage: Vec::new(),
@@ -74,9 +70,6 @@ pub fn start_monitoring() {
                 0.0
             };
 
-            let ram_used_gb = used_mem / (1024.0 * 1024.0 * 1024.0);
-            let ram_total_gb = total_mem / (1024.0 * 1024.0 * 1024.0);
-
             let cpu_cores_usage: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
 
             {
@@ -87,8 +80,6 @@ pub fn start_monitoring() {
                 };
                 state.cpu_usage = cpu;
                 state.ram_usage_pct = ram_pct;
-                state.ram_used_gb = ram_used_gb;
-                state.ram_total_gb = ram_total_gb;
                 state.push_cpu(cpu);
                 state.push_ram(ram_pct);
                 state.cpu_cores_usage = cpu_cores_usage;

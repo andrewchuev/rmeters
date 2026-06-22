@@ -9,15 +9,16 @@ A lightweight, high-performance system monitor overlay for the Windows 11 taskba
 ## Features
 
 - **Dual Display Modes**:
-  - **Classic Mode**: Shows global CPU and RAM usage sparklines (rolling 60-second history).
-  - **Per-Core Mode**: Shows individual CPU core usage vertical bars and a thick RAM progress bar (xMeters-style).
+  - **Classic Mode**: Shows global CPU and RAM usage as sparklines (rolling 60-second history).
+  - **Per-Core Mode**: Shows individual CPU core usage as vertical bars alongside a RAM sparkline history graph.
 - **Native Taskbar Integration**: Bezelless popup overlay positioned next to the system tray, owned by `Shell_TrayWnd` to stay on top without flicker.
-- **Right-Click Context Menu**: Right-click directly on the indicator panel to toggle display modes, configure autostart, open Settings, or exit — no separate tray icon needed.
+- **Settings Window**: Right-click directly on the indicator panel to open the Settings window — toggle display modes, configure autostart, or exit the app. No separate tray icon needed.
 - **No Dependencies**: Statically linked against the C runtime — runs on a clean Windows install without installing Visual C++ Redistributable.
 - **Installer Included**: Ships with an Inno Setup installer (`rmeters-setup.exe`) that handles Start Menu shortcuts and optional autostart, as well as a portable zip for those who prefer no installation.
 - **Zero Overhead**: Minimal CPU usage (~0%) and tiny RAM footprint (<12 MB) thanks to Rust and Direct2D hardware-accelerated rendering.
 - **High-DPI Support**: Automatically scales layout, fonts, and graphics for any DPI scaling (100%, 150%, 200%, etc.).
-- **Graceful Shutdown**: Handles standard console signals (Ctrl+C) and the Exit menu item cleanly.
+- **Fullscreen Auto-Hide**: Automatically hides the overlay when a fullscreen application is running and restores it on exit.
+- **Drag to Reposition**: The panel can be dragged horizontally along the taskbar; its position is saved across sessions.
 
 ## Installation
 
@@ -36,14 +37,13 @@ Download `rmeters-windows-x64-portable.zip`, extract anywhere, and run `rmeters.
 
 ## Usage
 
-Right-click on the overlay panel on your taskbar to access the context menu:
+Right-click on the overlay panel to open the Settings window:
 
-| Menu item | Description |
+| Setting | Description |
 |---|---|
 | Show CPU per Core | Toggle between classic sparkline and per-core bar modes |
 | Start with Windows | Enable / disable autostart via the registry |
-| Settings... | Open the settings window |
-| Exit | Quit the application |
+| Exit RMeters | Quit the application |
 
 ## System Requirements
 
@@ -66,6 +66,6 @@ The compiled binary will be at `target/release/rmeters.exe`.
 
 - **Metrics Collection**: Uses the `sysinfo` crate in a background thread to poll global/per-core CPU usage and memory stats every second.
 - **Rendering**: Calls Windows **Direct2D** and **DirectWrite** for hardware-accelerated graphics and crisp text, drawn onto a layered window.
-- **Positioning**: Hooks into tray area coordinates and repositions dynamically to fit seamlessly to the left of the system clock.
-- **Layering**: The taskbar (`Shell_TrayWnd`) is the window owner, guaranteeing the overlay stays on top natively.
-- **Mouse Input**: The overlay receives right-click events directly (`WM_RBUTTONUP`) while `WS_EX_NOACTIVATE` prevents it from stealing focus from other windows.
+- **Positioning**: Hooks into tray area coordinates and repositions dynamically to fit seamlessly to the left of the system clock. Saved X position persists across sessions.
+- **Layering**: The taskbar (`Shell_TrayWnd`) is the window owner, guaranteeing the overlay stays on top natively. The 1-second timer reasserts TOPMOST to recover from Win+D and minimize/restore animations.
+- **Mouse Input**: The overlay receives right-click events directly while `WS_EX_NOACTIVATE` prevents it from stealing focus from other windows.
