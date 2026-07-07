@@ -4,6 +4,7 @@ mod config;
 mod metrics;
 mod renderer;
 mod settings;
+mod tray;
 mod window;
 
 use std::fs::OpenOptions;
@@ -107,6 +108,8 @@ fn main() -> windows::core::Result<()> {
         }
     }
     log_info("Message loop exited");
+
+    tray::remove_tray(hwnd);
 
     unsafe {
         CoUninitialize();

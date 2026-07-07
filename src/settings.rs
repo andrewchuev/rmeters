@@ -3,9 +3,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::zero_ptr)]
 
 use std::mem::size_of;
-use std::ptr::null_mut;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use windows::core::{w, PCWSTR};
+use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteObject, EndPaint,
@@ -18,13 +17,14 @@ use windows::Win32::UI::Controls::{
     SetWindowTheme,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, GWLP_USERDATA, HMENU, NONCLIENTMETRICSW,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
-    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_SHOW, SW_HIDE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_ERASEBKGND, WM_NOTIFY, WM_PAINT, WM_SETFONT, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU,
@@ -35,6 +35,9 @@ const IDC_CHK_PER_CORE: usize = 2001;
 const IDC_CHK_AUTOSTART: usize = 2002;
 const IDC_BTN_EXIT: usize = 2003;
 const IDC_BTN_CLOSE: usize = 2004;
+const IDC_CHK_OVERLAY: usize = 2005;
+const IDC_CHK_TRAY: usize = 2006;
+const IDC_CHK_LOCK: usize = 2007;
 const IDC_LBL_VERSION: usize = 3000;
 const IDC_LBL_OPTIONS: usize = 3001;
 const IDC_LBL_ABOUT: usize = 3002;
@@ -50,9 +53,7 @@ static SETTINGS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SETTINGS_FONT: AtomicIsize = AtomicIsize::new(0);
 static DARK_BG_BRUSH: AtomicIsize = AtomicIsize::new(0);
 
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
+
 
 /// Scales a logical pixel value to physical pixels using the window's DPI.
 fn dpi_scale(v: i32, dpi: u32) -> i32 {
@@ -111,6 +112,9 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             let show_per_core = crate::config::SHOW_PER_CORE.load(Ordering::Relaxed);
             let autostart     = crate::config::AUTOSTART_ENABLED.load(Ordering::Relaxed);
+            let show_overlay  = crate::config::SHOW_OVERLAY.load(Ordering::Relaxed);
+            let show_tray     = crate::config::SHOW_TRAY.load(Ordering::Relaxed);
+            let lock_to_task  = crate::config::LOCK_TO_TASKBAR.load(Ordering::Relaxed);
 
             macro_rules! ctrl {
                 ($class:expr, $text:expr, $style:expr, $x:expr, $y:expr, $w:expr, $h:expr, $id:expr) => {{
@@ -123,9 +127,9 @@ pub unsafe extern "system" fn settings_wnd_proc(
             }
 
             // ── Version label ──────────────────────────────────────────────
-            let ver = to_wide(&format!("RMeters  v{}", env!("CARGO_PKG_VERSION")));
+            let ver = HSTRING::from(format!("RMeters  v{}", env!("CARGO_PKG_VERSION")));
             if let Ok(l) = ctrl!(w!("STATIC"), w!(""), 0, 16, 14, 248, 20, IDC_LBL_VERSION) {
-                let _ = SetWindowTextW(l, PCWSTR(ver.as_ptr()));
+                let _ = SetWindowTextW(l, &ver);
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
 
@@ -140,8 +144,30 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
             }
+            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Show Taskbar Overlay"),
+                BS_AUTOCHECKBOX as u32, 16, 94, 248, 22, IDC_CHK_OVERLAY)
+            {
+                SendMessageW(c, BM_SETCHECK, WPARAM(show_overlay as usize), LPARAM(0));
+                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
+                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
+            }
+            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Lock Overlay to Taskbar"),
+                BS_AUTOCHECKBOX as u32, 16, 116, 248, 22, IDC_CHK_LOCK)
+            {
+                SendMessageW(c, BM_SETCHECK, WPARAM(lock_to_task as usize), LPARAM(0));
+                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
+                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
+                let _ = EnableWindow(c, windows::Win32::Foundation::BOOL::from(show_overlay));
+            }
+            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Show Tray Icons"),
+                BS_AUTOCHECKBOX as u32, 16, 138, 248, 22, IDC_CHK_TRAY)
+            {
+                SendMessageW(c, BM_SETCHECK, WPARAM(show_tray as usize), LPARAM(0));
+                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
+                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
+            }
             if let Ok(c) = ctrl!(w!("BUTTON"), w!("Start with Windows"),
-                BS_AUTOCHECKBOX as u32, 16, 96, 248, 22, IDC_CHK_AUTOSTART)
+                BS_AUTOCHECKBOX as u32, 16, 160, 248, 22, IDC_CHK_AUTOSTART)
             {
                 SendMessageW(c, BM_SETCHECK, WPARAM(autostart as usize), LPARAM(0));
                 SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
@@ -149,19 +175,19 @@ pub unsafe extern "system" fn settings_wnd_proc(
             }
 
             // ── About ──────────────────────────────────────────────────────
-            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, 16, 136, 80, 16, IDC_LBL_ABOUT) {
+            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, 16, 200, 80, 16, IDC_LBL_ABOUT) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
             if let Ok(l) = ctrl!(w!("SysLink"),
                 w!("<a href=\"https://rmeters.reslab.pro\">rmeters.reslab.pro</a>"),
-                0, 16, 156, 248, 18, 0usize)
+                0, 16, 220, 248, 18, 0usize)
             {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
             }
             if let Ok(l) = ctrl!(w!("SysLink"),
                 w!("<a href=\"mailto:andrew.chuev@gmail.com\">andrew.chuev@gmail.com</a>"),
-                0, 16, 178, 248, 18, 0usize)
+                0, 16, 242, 248, 18, 0usize)
             {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
@@ -169,13 +195,13 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             // ── Buttons ────────────────────────────────────────────────────
             if let Ok(b) = ctrl!(w!("BUTTON"), w!("Exit RMeters"),
-                BS_PUSHBUTTON as u32, 16, 212, 120, 28, IDC_BTN_EXIT)
+                BS_PUSHBUTTON as u32, 16, 282, 120, 28, IDC_BTN_EXIT)
             {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
             }
             if let Ok(b) = ctrl!(w!("BUTTON"), w!("Close"),
-                BS_PUSHBUTTON as u32, 144, 212, 120, 28, IDC_BTN_CLOSE)
+                BS_PUSHBUTTON as u32, 144, 282, 120, 28, IDC_BTN_CLOSE)
             {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
@@ -205,7 +231,7 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             let pen = CreatePen(PS_SOLID, 1, COLORREF(COLOR_SEP));
             let old = SelectObject(hdc, HGDIOBJ(pen.0));
-            for y in [dpi_scale(40, dpi), dpi_scale(124, dpi), dpi_scale(202, dpi)] {
+            for y in [dpi_scale(40, dpi), dpi_scale(188, dpi), dpi_scale(270, dpi)] {
                 let _ = MoveToEx(hdc, x1, y, None);
                 let _ = LineTo(hdc, x2, y);
             }
@@ -246,7 +272,7 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 // SAFETY: NM_CLICK from a SysLink control guarantees lparam points to NMLINK.
                 let nml = &*(lparam.0 as *const NMLINK);
                 let url = PCWSTR(nml.item.szUrl.as_ptr());
-                ShellExecuteW(HWND(null_mut()), w!("open"), url,
+                ShellExecuteW(HWND::default(), w!("open"), url,
                     PCWSTR::null(), PCWSTR::null(), SW_SHOW);
             }
             LRESULT(0)
@@ -265,6 +291,47 @@ pub unsafe extern "system" fn settings_wnd_proc(
                         crate::config::save_config();
                         let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
                         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(overlay, None, false);
+                    }
+                    IDC_CHK_OVERLAY => {
+                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
+                        let tray_checked = crate::config::SHOW_TRAY.load(Ordering::Relaxed);
+                        if !checked && !tray_checked {
+                            SendMessageW(ctrl, BM_SETCHECK, WPARAM(1), LPARAM(0));
+                        } else {
+                            crate::config::SHOW_OVERLAY.store(checked, Ordering::Relaxed);
+                            crate::config::save_config();
+                            let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
+                            if checked {
+                                let _ = ShowWindow(overlay, SW_SHOW);
+                                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(overlay, None, false);
+                            } else {
+                                let _ = ShowWindow(overlay, SW_HIDE);
+                            }
+                            if let Ok(lock_ctrl) = windows::Win32::UI::WindowsAndMessaging::GetDlgItem(hwnd, IDC_CHK_LOCK as i32) {
+                                let _ = EnableWindow(lock_ctrl, windows::Win32::Foundation::BOOL::from(checked));
+                            }
+                        }
+                    }
+                    IDC_CHK_LOCK => {
+                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
+                        crate::config::LOCK_TO_TASKBAR.store(checked, Ordering::Relaxed);
+                        crate::config::save_config();
+                        let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
+                        crate::window::reposition_window(overlay);
+                    }
+                    IDC_CHK_TRAY => {
+                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
+                        let overlay_checked = crate::config::SHOW_OVERLAY.load(Ordering::Relaxed);
+                        if !checked && !overlay_checked {
+                            SendMessageW(ctrl, BM_SETCHECK, WPARAM(1), LPARAM(0));
+                        } else {
+                            crate::config::SHOW_TRAY.store(checked, Ordering::Relaxed);
+                            crate::config::save_config();
+                            let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
+                            if !checked {
+                                crate::tray::remove_tray(overlay);
+                            }
+                        }
                     }
                     IDC_CHK_AUTOSTART => {
                         let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
@@ -343,7 +410,7 @@ pub fn show_settings(overlay_hwnd: HWND) {
         let dpi = GetDpiForWindow(overlay_hwnd);
         let scale = dpi as f32 / 96.0;
         let win_w = (280.0 * scale) as i32;
-        let win_h = (300.0 * scale) as i32;
+        let win_h = (360.0 * scale) as i32;
 
         let (x, y) = center_on_monitor(overlay_hwnd, win_w, win_h);
 
@@ -351,7 +418,7 @@ pub fn show_settings(overlay_hwnd: HWND) {
             WINDOW_EX_STYLE(0), class_name, w!("RMeters \u{2014} Settings"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             x, y, win_w, win_h,
-            None, HMENU(null_mut()), hmod,
+            None, HMENU::default(), hmod,
             Some(overlay_hwnd.0 as *const _),
         ) {
             set_window_icon(hwnd);

@@ -23,6 +23,15 @@ use windows::Win32::Graphics::DirectWrite::{
 
 use crate::metrics::{METRICS, HISTORY_LEN};
 
+/// A snapshot of system metrics for rendering.
+struct MetricsSnapshot {
+    cpu: f32,
+    ram: f32,
+    cpu_arr: [f32; HISTORY_LEN],
+    ram_arr: [f32; HISTORY_LEN],
+    cpu_cores: Vec<f32>,
+}
+
 /// D2DERR_RECREATE_TARGET — returned by EndDraw when the D2D device is lost.
 const D2DERR_RECREATE_TARGET: i32 = 0x8899_000Cu32 as i32;
 
@@ -128,23 +137,24 @@ impl Renderer {
         }
 
         // Snapshot metrics without holding the lock during drawing.
-        let mut cpu_arr = [0.0f32; HISTORY_LEN];
-        let mut ram_arr = [0.0f32; HISTORY_LEN];
-        let cpu;
-        let ram;
-        let cpu_cores;
-        {
+        let metrics = {
+            let mut cpu_arr = [0.0f32; HISTORY_LEN];
+            let mut ram_arr = [0.0f32; HISTORY_LEN];
             let state = METRICS.read().unwrap_or_else(|p| p.into_inner());
-            cpu = state.cpu_usage;
-            ram = state.ram_usage_pct;
             for (i, &v) in state.cpu_history.iter().enumerate() {
                 cpu_arr[i] = v;
             }
             for (i, &v) in state.ram_history.iter().enumerate() {
                 ram_arr[i] = v;
             }
-            cpu_cores = state.cpu_cores_usage.clone();
-        }
+            MetricsSnapshot {
+                cpu: state.cpu_usage,
+                ram: state.ram_usage_pct,
+                cpu_arr,
+                ram_arr,
+                cpu_cores: state.cpu_cores_usage.clone(),
+            }
+        };
 
         let mut guard = RENDER_TARGET.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -183,11 +193,9 @@ impl Renderer {
                 crate::config::SHOW_PER_CORE.load(std::sync::atomic::Ordering::Relaxed);
 
             if show_per_core {
-                Self::draw_per_core(
-                    &rt, res, cpu, ram, &cpu_cores, &ram_arr, lw, lh,
-                );
+                Self::draw_per_core(&rt, res, &metrics, lw, lh);
             } else {
-                Self::draw_sparklines(&rt, res, cpu, ram, &cpu_arr, &ram_arr, lh);
+                Self::draw_sparklines(&rt, res, &metrics, lh);
             }
 
             rt.EndDraw(None, None)
@@ -208,15 +216,12 @@ impl Renderer {
     unsafe fn draw_per_core(
         rt: &ID2D1RenderTarget,
         res: &RenderResources,
-        cpu: f32,
-        ram: f32,
-        cpu_cores: &[f32],
-        ram_arr: &[f32; HISTORY_LEN],
+        metrics: &MetricsSnapshot,
         lw: f32,
         lh: f32,
     ) {
         // CPU header label
-        let cpu_text = format!("CPU {:.0}%", cpu);
+        let cpu_text = format!("CPU {:.0}%", metrics.cpu);
         let cpu_wide: Vec<u16> = cpu_text.encode_utf16().collect();
         rt.DrawText(
             &cpu_wide,
@@ -234,13 +239,13 @@ impl Renderer {
         let graph_height = graph_bottom - graph_top;
         let graph_width  = graph_right - graph_left;
 
-        let num_cores = cpu_cores.len();
+        let num_cores = metrics.cpu_cores.len();
         if num_cores > 0 {
             let gap = if num_cores > 16 { 0.5f32 } else { 1.0 };
             let total_gaps = (num_cores - 1) as f32 * gap;
             let bar_width = (graph_width - total_gaps) / num_cores as f32;
 
-            for (i, &usage) in cpu_cores.iter().enumerate() {
+            for (i, &usage) in metrics.cpu_cores.iter().enumerate() {
                 let x1 = graph_left + i as f32 * (bar_width + gap);
                 let x2 = x1 + bar_width;
                 rt.FillRectangle(
@@ -261,7 +266,7 @@ impl Renderer {
         }
 
         // RAM header label
-        let ram_text = format!("RAM {:.0}%", ram);
+        let ram_text = format!("RAM {:.0}%", metrics.ram);
         let ram_wide: Vec<u16> = ram_text.encode_utf16().collect();
         rt.DrawText(
             &ram_wide,
@@ -281,7 +286,7 @@ impl Renderer {
         );
 
         let ram_width_step = (ram_right - ram_left) / (HISTORY_LEN - 1) as f32;
-        for (i, pair) in ram_arr.windows(2).enumerate() {
+        for (i, pair) in metrics.ram_arr.windows(2).enumerate() {
             let x1 = ram_left + i as f32 * ram_width_step;
             let y1 = graph_bottom - (pair[0] / 100.0) * graph_height;
             let x2 = ram_left + (i + 1) as f32 * ram_width_step;
@@ -301,14 +306,11 @@ impl Renderer {
     unsafe fn draw_sparklines(
         rt: &ID2D1RenderTarget,
         res: &RenderResources,
-        cpu: f32,
-        ram: f32,
-        cpu_arr: &[f32; HISTORY_LEN],
-        ram_arr: &[f32; HISTORY_LEN],
+        metrics: &MetricsSnapshot,
         lh: f32,
     ) {
         // CPU header label
-        let cpu_text = format!("CPU {:.0}%", cpu);
+        let cpu_text = format!("CPU {:.0}%", metrics.cpu);
         let cpu_wide: Vec<u16> = cpu_text.encode_utf16().collect();
         rt.DrawText(
             &cpu_wide,
@@ -331,7 +333,7 @@ impl Renderer {
         );
 
         let width_step = (graph_right - graph_left) / (HISTORY_LEN - 1) as f32;
-        for (i, pair) in cpu_arr.windows(2).enumerate() {
+        for (i, pair) in metrics.cpu_arr.windows(2).enumerate() {
             let x1 = graph_left + i as f32 * width_step;
             let y1 = graph_bottom - (pair[0] / 100.0) * graph_height;
             let x2 = graph_left + (i + 1) as f32 * width_step;
@@ -346,7 +348,7 @@ impl Renderer {
         }
 
         // RAM header label
-        let ram_text = format!("RAM {:.0}%", ram);
+        let ram_text = format!("RAM {:.0}%", metrics.ram);
         let ram_wide: Vec<u16> = ram_text.encode_utf16().collect();
         rt.DrawText(
             &ram_wide,
@@ -366,7 +368,7 @@ impl Renderer {
         );
 
         let ram_width_step = (ram_right - ram_left) / (HISTORY_LEN - 1) as f32;
-        for (i, pair) in ram_arr.windows(2).enumerate() {
+        for (i, pair) in metrics.ram_arr.windows(2).enumerate() {
             let x1 = ram_left + i as f32 * ram_width_step;
             let y1 = graph_bottom - (pair[0] / 100.0) * graph_height;
             let x2 = ram_left + (i + 1) as f32 * ram_width_step;

@@ -49,7 +49,7 @@ pub static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
 /// and invalidates the overlay window to trigger a repaint.
 pub fn start_monitoring() {
     thread::spawn(|| {
-        let mut sys = System::new_all();
+        let mut sys = System::new();
 
         // First refresh to prime CPU values (they return 0 on the very first call)
         sys.refresh_cpu_usage();
@@ -92,8 +92,17 @@ pub fn start_monitoring() {
                 // outlives this background thread (WM_DESTROY posts WM_QUIT before
                 // the process exits).
                 let hwnd = HWND(raw as *mut std::ffi::c_void);
-                unsafe {
-                    let _ = InvalidateRect(hwnd, None, false);
+
+                let (cpu_hist, ram_hist) = {
+                    let state = METRICS.read().unwrap_or_else(|p| p.into_inner());
+                    (state.cpu_history.clone(), state.ram_history.clone())
+                };
+                crate::tray::update_tray(hwnd, cpu, ram_pct, &cpu_hist, &ram_hist);
+
+                if crate::config::SHOW_OVERLAY.load(Ordering::Relaxed) {
+                    unsafe {
+                        let _ = InvalidateRect(hwnd, None, false);
+                    }
                 }
             }
 
