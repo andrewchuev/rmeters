@@ -60,8 +60,8 @@ unsafe fn create_dynamic_icon(
     // DPI scale factor (base standard small icon is 16x16)
     let scale = cx as f32 / 16.0;
 
-    // Draw dark border (opaque, color 0x002D2D2D)
-    let pen_border = CreatePen(PS_SOLID, 1, COLORREF(0x002D2D2D));
+    // Draw border (opaque, color 0x00555555)
+    let pen_border = CreatePen(PS_SOLID, 1, COLORREF(0x00555555));
     let pen_black = CreatePen(PS_SOLID, 1, COLORREF(0));
 
     let old_color_pen = SelectObject(hdc_mem, HGDIOBJ(pen_border.0));
@@ -95,48 +95,49 @@ unsafe fn create_dynamic_icon(
     let y_end = (11.0 * scale) as i32;
 
     if is_cpu {
-        // Draw C
-        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
+        // Draw C (rounded corners, size 4x7)
+        let _ = MoveToEx(hdc_mem, x_start + scale as i32, y_start, None);
         let _ = LineTo(hdc_mem, x_end, y_start);
-        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
+        let _ = MoveToEx(hdc_mask, x_start + scale as i32, y_start, None);
         let _ = LineTo(hdc_mask, x_end, y_start);
 
-        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
-        let _ = LineTo(hdc_mem, x_start, y_end);
-        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
-        let _ = LineTo(hdc_mask, x_start, y_end);
+        let _ = MoveToEx(hdc_mem, x_start, y_start + scale as i32, None);
+        let _ = LineTo(hdc_mem, x_start, y_end - scale as i32);
+        let _ = MoveToEx(hdc_mask, x_start, y_start + scale as i32, None);
+        let _ = LineTo(hdc_mask, x_start, y_end - scale as i32);
 
-        let _ = MoveToEx(hdc_mem, x_start, y_end, None);
-        let _ = LineTo(hdc_mem, x_end, y_end);
-        let _ = MoveToEx(hdc_mask, x_start, y_end, None);
-        let _ = LineTo(hdc_mask, x_end, y_end);
+        let _ = MoveToEx(hdc_mem, x_start + scale as i32, y_end - scale as i32, None);
+        let _ = LineTo(hdc_mem, x_end, y_end - scale as i32);
+        let _ = MoveToEx(hdc_mask, x_start + scale as i32, y_end - scale as i32, None);
+        let _ = LineTo(hdc_mask, x_end, y_end - scale as i32);
     } else {
-        // Draw R
-        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
-        let _ = LineTo(hdc_mem, x_start, y_end + 1);
-        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
-        let _ = LineTo(hdc_mask, x_start, y_end + 1);
-
-        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
-        let _ = LineTo(hdc_mem, x_end, y_start);
-        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
-        let _ = LineTo(hdc_mask, x_end, y_start);
-
+        // Draw R (rounded top loop, diagonal leg, size 4x7)
         let y_mid = (y_start + y_end) / 2;
-        let _ = MoveToEx(hdc_mem, x_end, y_start, None);
-        let _ = LineTo(hdc_mem, x_end, y_mid);
-        let _ = MoveToEx(hdc_mask, x_end, y_start, None);
-        let _ = LineTo(hdc_mask, x_end, y_mid);
+
+        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
+        let _ = LineTo(hdc_mem, x_start, y_end - scale as i32);
+        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
+        let _ = LineTo(hdc_mask, x_start, y_end - scale as i32);
+
+        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
+        let _ = LineTo(hdc_mem, x_end - scale as i32, y_start);
+        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
+        let _ = LineTo(hdc_mask, x_end - scale as i32, y_start);
+
+        let _ = MoveToEx(hdc_mem, x_end - scale as i32, y_start + scale as i32, None);
+        let _ = LineTo(hdc_mem, x_end - scale as i32, y_mid + 1);
+        let _ = MoveToEx(hdc_mask, x_end - scale as i32, y_start + scale as i32, None);
+        let _ = LineTo(hdc_mask, x_end - scale as i32, y_mid + 1);
 
         let _ = MoveToEx(hdc_mem, x_start, y_mid, None);
-        let _ = LineTo(hdc_mem, x_end, y_mid);
+        let _ = LineTo(hdc_mem, x_end - scale as i32, y_mid);
         let _ = MoveToEx(hdc_mask, x_start, y_mid, None);
-        let _ = LineTo(hdc_mask, x_end, y_mid);
+        let _ = LineTo(hdc_mask, x_end - scale as i32, y_mid);
 
-        let _ = MoveToEx(hdc_mem, x_start + (1.5 * scale) as i32, y_mid, None);
-        let _ = LineTo(hdc_mem, x_end, y_end + 1);
-        let _ = MoveToEx(hdc_mask, x_start + (1.5 * scale) as i32, y_mid, None);
-        let _ = LineTo(hdc_mask, x_end, y_end + 1);
+        let _ = MoveToEx(hdc_mem, x_start + scale as i32, y_mid + scale as i32, None);
+        let _ = LineTo(hdc_mem, x_end, y_end - scale as i32);
+        let _ = MoveToEx(hdc_mask, x_start + scale as i32, y_mid + scale as i32, None);
+        let _ = LineTo(hdc_mask, x_end, y_end - scale as i32);
     }
 
     // Clean up letter pen
