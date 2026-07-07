@@ -31,7 +31,6 @@ fn set_tooltip(tip: &mut [u16; 128], text: &str) {
 unsafe fn create_dynamic_icon(
     history: &VecDeque<f32>,
     color: u32,
-    is_cpu: bool,
     cx: i32,
     cy: i32,
 ) -> Result<HICON, windows::core::Error> {
@@ -57,130 +56,40 @@ unsafe fn create_dynamic_icon(
     // Fill mask bitmap with white (1 = transparent)
     let _ = PatBlt(hdc_mask, 0, 0, cx, cy, WHITENESS);
 
-    // DPI scale factor (base standard small icon is 16x16)
-    let scale = cx as f32 / 16.0;
-
-    // Draw border (opaque, color 0x00555555)
-    let pen_border = CreatePen(PS_SOLID, 1, COLORREF(0x00555555));
+    // Setup pens (glowing color and black mask pen)
+    let pen_graph = CreatePen(PS_SOLID, 1, COLORREF(color));
     let pen_black = CreatePen(PS_SOLID, 1, COLORREF(0));
 
-    let old_color_pen = SelectObject(hdc_mem, HGDIOBJ(pen_border.0));
-    let old_mask_pen = SelectObject(hdc_mask, HGDIOBJ(pen_black.0));
-
-    let _ = MoveToEx(hdc_mem, 0, 0, None);
-    let _ = LineTo(hdc_mem, cx - 1, 0);
-    let _ = LineTo(hdc_mem, cx - 1, cy - 1);
-    let _ = LineTo(hdc_mem, 0, cy - 1);
-    let _ = LineTo(hdc_mem, 0, 0);
-
-    let _ = MoveToEx(hdc_mask, 0, 0, None);
-    let _ = LineTo(hdc_mask, cx - 1, 0);
-    let _ = LineTo(hdc_mask, cx - 1, cy - 1);
-    let _ = LineTo(hdc_mask, 0, cy - 1);
-    let _ = LineTo(hdc_mask, 0, 0);
-
-    // Clean up border pens
-    SelectObject(hdc_mem, old_color_pen);
-    SelectObject(hdc_mask, old_mask_pen);
-    let _ = DeleteObject(HGDIOBJ(pen_border.0));
-
-    // Draw the letter label ('C' or 'R') on the left side (white color, opaque)
-    let pen_letter = CreatePen(PS_SOLID, 1, COLORREF(0x00E0E0E0));
-    let old_color_pen = SelectObject(hdc_mem, HGDIOBJ(pen_letter.0));
-    let old_mask_pen = SelectObject(hdc_mask, HGDIOBJ(pen_black.0));
-
-    let x_start = (2.0 * scale) as i32;
-    let x_end = (6.0 * scale) as i32;
-    let y_start = (4.0 * scale) as i32;
-    let y_end = (11.0 * scale) as i32;
-
-    if is_cpu {
-        // Draw C (rounded corners, size 4x7)
-        let _ = MoveToEx(hdc_mem, x_start + scale as i32, y_start, None);
-        let _ = LineTo(hdc_mem, x_end, y_start);
-        let _ = MoveToEx(hdc_mask, x_start + scale as i32, y_start, None);
-        let _ = LineTo(hdc_mask, x_end, y_start);
-
-        let _ = MoveToEx(hdc_mem, x_start, y_start + scale as i32, None);
-        let _ = LineTo(hdc_mem, x_start, y_end - scale as i32);
-        let _ = MoveToEx(hdc_mask, x_start, y_start + scale as i32, None);
-        let _ = LineTo(hdc_mask, x_start, y_end - scale as i32);
-
-        let _ = MoveToEx(hdc_mem, x_start + scale as i32, y_end - scale as i32, None);
-        let _ = LineTo(hdc_mem, x_end, y_end - scale as i32);
-        let _ = MoveToEx(hdc_mask, x_start + scale as i32, y_end - scale as i32, None);
-        let _ = LineTo(hdc_mask, x_end, y_end - scale as i32);
-    } else {
-        // Draw R (rounded top loop, diagonal leg, size 4x7)
-        let y_mid = (y_start + y_end) / 2;
-
-        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
-        let _ = LineTo(hdc_mem, x_start, y_end - scale as i32);
-        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
-        let _ = LineTo(hdc_mask, x_start, y_end - scale as i32);
-
-        let _ = MoveToEx(hdc_mem, x_start, y_start, None);
-        let _ = LineTo(hdc_mem, x_end - scale as i32, y_start);
-        let _ = MoveToEx(hdc_mask, x_start, y_start, None);
-        let _ = LineTo(hdc_mask, x_end - scale as i32, y_start);
-
-        let _ = MoveToEx(hdc_mem, x_end - scale as i32, y_start + scale as i32, None);
-        let _ = LineTo(hdc_mem, x_end - scale as i32, y_mid + 1);
-        let _ = MoveToEx(hdc_mask, x_end - scale as i32, y_start + scale as i32, None);
-        let _ = LineTo(hdc_mask, x_end - scale as i32, y_mid + 1);
-
-        let _ = MoveToEx(hdc_mem, x_start, y_mid, None);
-        let _ = LineTo(hdc_mem, x_end - scale as i32, y_mid);
-        let _ = MoveToEx(hdc_mask, x_start, y_mid, None);
-        let _ = LineTo(hdc_mask, x_end - scale as i32, y_mid);
-
-        let _ = MoveToEx(hdc_mem, x_start + scale as i32, y_mid + scale as i32, None);
-        let _ = LineTo(hdc_mem, x_end, y_end - scale as i32);
-        let _ = MoveToEx(hdc_mask, x_start + scale as i32, y_mid + scale as i32, None);
-        let _ = LineTo(hdc_mask, x_end, y_end - scale as i32);
-    }
-
-    // Clean up letter pen
-    SelectObject(hdc_mem, old_color_pen);
-    SelectObject(hdc_mask, old_mask_pen);
-    let _ = DeleteObject(HGDIOBJ(pen_letter.0));
-
-    // Draw the sparkline on the right side
-    let pen_graph = CreatePen(PS_SOLID, 1, COLORREF(color));
     let old_color_pen = SelectObject(hdc_mem, HGDIOBJ(pen_graph.0));
     let old_mask_pen = SelectObject(hdc_mask, HGDIOBJ(pen_black.0));
 
-    let x_graph_start = (7.0 * scale) as i32;
-    let graph_w = (cx - 1) - x_graph_start;
-
+    // Draw the sparkline columns spanning the full width of the icon
     let hist_len = history.len();
-    for x in 0..graph_w {
-        let val = if hist_len >= graph_w as usize {
-            history[hist_len - graph_w as usize + x as usize]
-        } else if x as usize >= graph_w as usize - hist_len {
-            history[x as usize - (graph_w as usize - hist_len)]
+    for x in 0..cx {
+        let val = if hist_len >= cx as usize {
+            history[hist_len - cx as usize + x as usize]
+        } else if x as usize >= cx as usize - hist_len {
+            history[x as usize - (cx as usize - hist_len)]
         } else {
             0.0
         };
 
-        // Scale value to fit vertically inside border with a 1px margin
-        let h = (val / 100.0 * (cy - 3) as f32) as i32;
-        let x_coord = x_graph_start + x;
+        // Scale value to full icon height
+        let h = (val / 100.0 * (cy - 1) as f32) as i32;
 
-        let _ = MoveToEx(hdc_mem, x_coord, cy - 2, None);
-        let _ = LineTo(hdc_mem, x_coord, cy - 2 - h);
+        let _ = MoveToEx(hdc_mem, x, cy - 1, None);
+        let _ = LineTo(hdc_mem, x, cy - 1 - h);
 
-        let _ = MoveToEx(hdc_mask, x_coord, cy - 2, None);
-        let _ = LineTo(hdc_mask, x_coord, cy - 2 - h);
+        let _ = MoveToEx(hdc_mask, x, cy - 1, None);
+        let _ = LineTo(hdc_mask, x, cy - 1 - h);
     }
 
-    // Clean up sparkline pens
+    // Clean up drawing resources
     SelectObject(hdc_mem, old_color_pen);
     SelectObject(hdc_mask, old_mask_pen);
     let _ = DeleteObject(HGDIOBJ(pen_graph.0));
     let _ = DeleteObject(HGDIOBJ(pen_black.0));
 
-    // Restore old bitmaps and clean up DCs
     SelectObject(hdc_mem, old_color_bitmap);
     SelectObject(hdc_mask, old_mask_bitmap);
     let _ = DeleteDC(hdc_mem);
@@ -221,14 +130,14 @@ pub fn update_tray(
 
         // CPU Icon (light blue: BGR format is 0x00FF9900)
         let cpu_color = 0x00FF9900;
-        let cpu_hicon = match create_dynamic_icon(cpu_history, cpu_color, true, cx, cy) {
+        let cpu_hicon = match create_dynamic_icon(cpu_history, cpu_color, cx, cy) {
             Ok(h) => h,
             Err(_) => return,
         };
 
         // RAM Icon (light green: BGR format is 0x0033CC19)
         let ram_color = 0x0033CC19;
-        let ram_hicon = match create_dynamic_icon(ram_history, ram_color, false, cx, cy) {
+        let ram_hicon = match create_dynamic_icon(ram_history, ram_color, cx, cy) {
             Ok(h) => h,
             Err(_) => {
                 let _ = DestroyIcon(cpu_hicon);
