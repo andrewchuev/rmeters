@@ -3,6 +3,7 @@
 mod config;
 mod disk;
 mod metrics;
+mod ring_icon;
 mod settings;
 mod tray;
 mod window;

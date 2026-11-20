@@ -1,6 +1,6 @@
 # rmeters
 
-A lightweight system monitor for the Windows notification area (system tray), written in Rust. Small scrolling graphs next to the clock show CPU, RAM and disk load in real time, in the spirit of the classic xMeters utility.
+A lightweight system monitor for the Windows notification area (system tray), written in Rust. Small icons next to the clock show CPU and RAM load as scrolling graphs and how full each disk is as a ring chart, in the spirit of the classic xMeters utility.
 
 **[Download Latest Release](https://github.com/andrewchuev/rmeters/releases/latest)**
 
@@ -8,11 +8,11 @@ A lightweight system monitor for the Windows notification area (system tray), wr
 
 ## Screenshots
 
-Tray icons (enlarged ×6) — CPU, RAM and two disk volumes:
+Tray icons (enlarged ×6) — CPU and RAM graphs, then fill rings for drives C: and D:
 
 ![CPU, RAM and disk tray icons](docs/screenshots/tray-icons.png)
 
-Low-space alerts — a volume over 80% full turns yellow, over 90% red:
+Low-space alerts — the ring turns yellow from 85% used and red from 95%:
 
 ![Disk icons with low and critically low space](docs/screenshots/disk-alerts.png)
 
@@ -23,8 +23,8 @@ Settings window, opened by clicking any tray icon:
 ## Features
 
 - **CPU and RAM Icons**: Scrolling sparkline graphs with a 60-second history — CPU in blue, RAM in green. Hover an icon for the exact value.
-- **Disk Icons**: One icon per local fixed volume (C:, D:, …) graphing its active time, the same metric Task Manager shows. The tooltip shows the drive letter, active time and free space. Volumes that appear or disappear are picked up automatically; removable and network drives are not shown.
-- **Disk Space Alerts**: Below 80% used, the disk graph is a violet line on a transparent background. From 80% (low space) the whole icon is filled yellow, and from 90% (critically low) red, with the graph drawn in dark on top, so a nearly full drive stands out even when idle.
+- **Disk Icons**: One ring chart per local fixed volume (C:, D:, …) showing how full it is, filled clockwise from the top, with the drive letter in the middle. The tooltip shows the used share and free space. Volumes that appear or disappear are picked up automatically; removable and network drives are not shown.
+- **Disk Space Alerts**: The used part of the ring is violet normally, yellow from 85% used (low space) and red from 95% (critically low).
 - **Per-Icon Toggles**: CPU, RAM and disk icons can be shown or hidden individually; at least one always stays visible so the settings remain reachable.
 - **Settings Window**: Left- or right-click any tray icon to toggle icons and autostart, or to exit the app.
 - **Explorer Restart Recovery**: Icons are re-added automatically when Explorer restarts.
@@ -56,7 +56,7 @@ Click any rmeters tray icon to open the Settings window:
 |---|---|
 | Show CPU Icon | Show or hide the CPU load graph icon |
 | Show RAM Icon | Show or hide the RAM usage graph icon |
-| Show Disk Icons | Show or hide the per-volume disk activity icons |
+| Show Disk Icons | Show or hide the per-volume disk fill icons |
 | Start with Windows | Enable / disable autostart via the registry |
 | Exit RMeters | Quit the application |
 
@@ -94,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File scripts\make-icon.ps1
 ## How it Works
 
 - **Metrics Collection**: A background thread polls CPU and memory stats every second using the `sysinfo` crate, initialized lazily with `System::new()` to avoid full-system scans.
-- **Disk Activity**: Fixed volumes are found with `GetLogicalDrives` + `GetDriveTypeW`. Active time is `100 − \LogicalDisk(X:)\% Idle Time` read through the Performance Data Helper (PDH) API; free space comes from `GetDiskFreeSpaceExW`.
-- **Icons**: Each tick, every enabled icon is drawn as a GDI sparkline into a fresh `HICON` (color bitmap plus transparency mask) and pushed to the shell with `Shell_NotifyIconW`; the previous handle is destroyed.
+- **Disk Space**: Fixed volumes are found with `GetLogicalDrives` + `GetDriveTypeW`; used and free space come from `GetDiskFreeSpaceExW`.
+- **Icons**: Each tick, every enabled icon is drawn into a fresh `HICON` and pushed to the shell with `Shell_NotifyIconW`; the previous handle is destroyed. CPU and RAM graphs are GDI sparklines with a transparency mask. Disk rings are rendered in software with 4×4 supersampling into a 32-bit alpha icon; the drive letter is rasterized with GDI grayscale antialiasing and centered by its actual ink bounds.
 - **Hidden Main Window**: A never-shown top-level window owns the icons and receives their click callbacks. It is not a message-only window, so it also receives the `TaskbarCreated` broadcast used to re-add icons after an Explorer restart.
 - **Autostart**: Toggled through the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value, with errors taken from the registry API return codes.

@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use windows::Win32::Foundation::{COLORREF, HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND};
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, CreateSolidBrush,
-    DeleteDC, DeleteObject, FillRect, GetDC, HGDIOBJ, LineTo, MoveToEx, PatBlt, ReleaseDC,
-    SelectObject, BLACKNESS, PS_SOLID, WHITENESS,
+    CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, DeleteDC, DeleteObject,
+    GetDC, HGDIOBJ, LineTo, MoveToEx, PatBlt, ReleaseDC, SelectObject, BLACKNESS, PS_SOLID,
+    WHITENESS,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -16,6 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::metrics::MetricsState;
+use crate::ring_icon::{create_ring_icon, Rgb, RingColors};
 
 pub const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1024;
 const ID_TRAY_CPU: u32 = 1;
@@ -23,18 +24,20 @@ const ID_TRAY_RAM: u32 = 2;
 /// Disk icons use ID_TRAY_DISK_BASE + drive index (A: = 0 … Z: = 25).
 const ID_TRAY_DISK_BASE: u32 = 100;
 
-// Colors in BGR order (Windows COLORREF convention).
+// Sparkline colors in BGR order (Windows COLORREF convention).
 const COLOR_CPU: u32 = 0x00FF9900;
 const COLOR_RAM: u32 = 0x0033CC19;
-const COLOR_DISK_OK: u32 = 0x00FF66CC; // violet
-const COLOR_DISK_WARN: u32 = 0x0000D2FF; // yellow
-const COLOR_DISK_CRIT: u32 = 0x003C3CFF; // red
-/// Graph color drawn over a filled alert background.
-const COLOR_ON_ALERT: u32 = 0x00141414;
 
-// Used-space thresholds in percent, matching when Explorer turns a drive bar red.
-const DISK_WARN_PCT: f64 = 80.0;
-const DISK_CRIT_PCT: f64 = 90.0;
+// Disk ring colors (RGB).
+const DISK_OK: Rgb = [204, 102, 255]; // violet
+const DISK_WARN: Rgb = [255, 210, 0]; // yellow
+const DISK_CRIT: Rgb = [255, 60, 60]; // red
+const DISK_FREE: Rgb = [90, 90, 90];
+const DISK_HOLE: Rgb = [28, 28, 28];
+
+// Used-space thresholds in percent.
+const DISK_WARN_PCT: f64 = 85.0;
+const DISK_CRIT_PCT: f64 = 95.0;
 
 #[derive(Debug, PartialEq)]
 enum DiskLevel {
@@ -43,12 +46,15 @@ enum DiskLevel {
     Critical,
 }
 
-fn disk_level(free_bytes: u64, total_bytes: u64) -> DiskLevel {
+fn used_pct(free_bytes: u64, total_bytes: u64) -> f64 {
     if total_bytes == 0 {
-        return DiskLevel::Ok;
+        return 0.0;
     }
     let used = total_bytes - free_bytes.min(total_bytes);
-    let used_pct = used as f64 * 100.0 / total_bytes as f64;
+    used as f64 * 100.0 / total_bytes as f64
+}
+
+fn disk_level(used_pct: f64) -> DiskLevel {
     if used_pct >= DISK_CRIT_PCT {
         DiskLevel::Critical
     } else if used_pct >= DISK_WARN_PCT {
@@ -62,13 +68,18 @@ fn disk_level(free_bytes: u64, total_bytes: u64) -> DiskLevel {
 /// Shared between the monitoring thread and the UI thread.
 static ADDED: Mutex<Vec<(u32, isize)>> = Mutex::new(Vec::new());
 
+/// What a tray icon draws.
+enum IconKind<'a> {
+    /// Scrolling history graph in a BGR color.
+    Sparkline { color: u32, history: &'a VecDeque<f32> },
+    /// Donut chart of a used share (0..=1) with a centered label.
+    Ring { used: f32, color: Rgb, label: String },
+}
+
 /// One tray icon to show on this tick.
 struct IconSpec<'a> {
     id: u32,
-    color: u32,
-    /// Opaque fill behind the graph; None keeps the background transparent.
-    background: Option<u32>,
-    history: &'a VecDeque<f32>,
+    kind: IconKind<'a>,
     tip: String,
 }
 
@@ -77,10 +88,9 @@ fn set_tooltip(tip: &mut [u16; 128], text: &str) {
     tip[..wide.len()].copy_from_slice(&wide);
 }
 
-unsafe fn create_dynamic_icon(
+unsafe fn create_sparkline_icon(
     history: &VecDeque<f32>,
     color: u32,
-    background: Option<u32>,
     cx: i32,
     cy: i32,
 ) -> Result<HICON, windows::core::Error> {
@@ -89,17 +99,8 @@ unsafe fn create_dynamic_icon(
     let hbm_color = CreateCompatibleBitmap(hdc_screen, cx, cy);
     let old_color_bitmap = SelectObject(hdc_mem, HGDIOBJ(hbm_color.0));
 
-    // Black where the mask is transparent; the fill color where it is opaque.
-    match background {
-        Some(bg) => {
-            let brush = CreateSolidBrush(COLORREF(bg));
-            FillRect(hdc_mem, &RECT { left: 0, top: 0, right: cx, bottom: cy }, brush);
-            let _ = DeleteObject(HGDIOBJ(brush.0));
-        }
-        None => {
-            let _ = PatBlt(hdc_mem, 0, 0, cx, cy, BLACKNESS);
-        }
-    }
+    // Fill color bitmap with black (opaque base for transparent icon)
+    let _ = PatBlt(hdc_mem, 0, 0, cx, cy, BLACKNESS);
 
     let hbm_mask = CreateBitmap(cx, cy, 1, 1, None);
     if hbm_mask.0.is_null() {
@@ -112,9 +113,8 @@ unsafe fn create_dynamic_icon(
     let hdc_mask = CreateCompatibleDC(hdc_screen);
     let old_mask_bitmap = SelectObject(hdc_mask, HGDIOBJ(hbm_mask.0));
 
-    // Mask: white (1) = transparent, black (0) = opaque.
-    let mask_fill = if background.is_some() { BLACKNESS } else { WHITENESS };
-    let _ = PatBlt(hdc_mask, 0, 0, cx, cy, mask_fill);
+    // Fill mask bitmap with white (1 = transparent)
+    let _ = PatBlt(hdc_mask, 0, 0, cx, cy, WHITENESS);
 
     // Setup pens (glowing color and black mask pen)
     let pen_graph = CreatePen(PS_SOLID, 1, COLORREF(color));
@@ -135,7 +135,7 @@ unsafe fn create_dynamic_icon(
         };
 
         // Scale value to full icon height. At least one pixel is drawn so an idle
-        // metric (e.g. a quiet disk) still shows a baseline instead of an invisible icon.
+        // metric still shows a baseline instead of an invisible icon.
         let h = ((val.clamp(0.0, 100.0) / 100.0 * (cy - 1) as f32) as i32).max(1);
 
         let _ = MoveToEx(hdc_mem, x, cy - 1, None);
@@ -186,44 +186,39 @@ fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
     if crate::config::SHOW_CPU.load(Ordering::Relaxed) {
         specs.push(IconSpec {
             id: ID_TRAY_CPU,
-            color: COLOR_CPU,
-            background: None,
-            history: state.cpu_history.values(),
+            kind: IconKind::Sparkline { color: COLOR_CPU, history: state.cpu_history.values() },
             tip: format!("CPU: {:.0}%", state.cpu_usage),
         });
     }
     if crate::config::SHOW_RAM.load(Ordering::Relaxed) {
         specs.push(IconSpec {
             id: ID_TRAY_RAM,
-            color: COLOR_RAM,
-            background: None,
-            history: state.ram_history.values(),
+            kind: IconKind::Sparkline { color: COLOR_RAM, history: state.ram_history.values() },
             tip: format!("RAM: {:.0}%", state.ram_usage_pct),
         });
     }
     if crate::config::SHOW_DISKS.load(Ordering::Relaxed) {
         for d in &state.disks {
-            // Low space fills the whole icon with the alert color so it is
-            // noticeable even when the disk is idle.
-            let (color, background, note) = match disk_level(d.free_bytes, d.total_bytes) {
-                DiskLevel::Ok => (COLOR_DISK_OK, None, ""),
-                DiskLevel::Low => (COLOR_ON_ALERT, Some(COLOR_DISK_WARN), " (low space)"),
-                DiskLevel::Critical => {
-                    (COLOR_ON_ALERT, Some(COLOR_DISK_CRIT), " (critically low)")
-                }
+            let pct = used_pct(d.free_bytes, d.total_bytes);
+            let (color, note) = match disk_level(pct) {
+                DiskLevel::Ok => (DISK_OK, ""),
+                DiskLevel::Low => (DISK_WARN, " (low space)"),
+                DiskLevel::Critical => (DISK_CRIT, " (critically low)"),
             };
             specs.push(IconSpec {
                 id: ID_TRAY_DISK_BASE + (d.letter as u32 - 'A' as u32),
-                color,
-                background,
-                history: d.history.values(),
+                kind: IconKind::Ring {
+                    used: (pct / 100.0) as f32,
+                    color,
+                    label: d.letter.to_string(),
+                },
                 tip: format!(
-                    "Disk {}: {:.0}% active\n{} free of {}{}",
+                    "Disk {}: {:.0}% used{}\n{} free of {}",
                     d.letter,
-                    d.active_pct,
+                    pct,
+                    note,
                     format_bytes(d.free_bytes),
                     format_bytes(d.total_bytes),
-                    note,
                 ),
             });
         }
@@ -267,7 +262,16 @@ pub fn update_tray(hwnd: HWND, state: &MetricsState) {
         let cy = GetSystemMetrics(SM_CYSMICON);
 
         for spec in &specs {
-            let Ok(hicon) = create_dynamic_icon(spec.history, spec.color, spec.background, cx, cy) else {
+            let icon = match &spec.kind {
+                IconKind::Sparkline { color, history } => {
+                    create_sparkline_icon(history, *color, cx, cy)
+                }
+                IconKind::Ring { used, color, label } => {
+                    let colors = RingColors { used: *color, free: DISK_FREE, hole: DISK_HOLE };
+                    create_ring_icon(cx as usize, *used, &colors, label)
+                }
+            };
+            let Ok(hicon) = icon else {
                 continue;
             };
             let mut nid = NOTIFYICONDATAW {
@@ -315,17 +319,28 @@ pub fn reset_after_shell_restart() {
 
 #[cfg(test)]
 mod tests {
-    use super::{disk_level, format_bytes, DiskLevel};
+    use super::{disk_level, format_bytes, used_pct, DiskLevel};
+
+    fn level(free: u64, total: u64) -> DiskLevel {
+        disk_level(used_pct(free, total))
+    }
 
     #[test]
     fn disk_level_follows_used_space_thresholds() {
-        assert_eq!(disk_level(50, 100), DiskLevel::Ok);
-        assert_eq!(disk_level(21, 100), DiskLevel::Ok);
-        assert_eq!(disk_level(20, 100), DiskLevel::Low);
-        assert_eq!(disk_level(11, 100), DiskLevel::Low);
-        assert_eq!(disk_level(10, 100), DiskLevel::Critical);
-        assert_eq!(disk_level(0, 100), DiskLevel::Critical);
-        assert_eq!(disk_level(0, 0), DiskLevel::Ok);
+        assert_eq!(level(50, 100), DiskLevel::Ok);
+        assert_eq!(level(16, 100), DiskLevel::Ok);
+        assert_eq!(level(15, 100), DiskLevel::Low);
+        assert_eq!(level(6, 100), DiskLevel::Low);
+        assert_eq!(level(5, 100), DiskLevel::Critical);
+        assert_eq!(level(0, 100), DiskLevel::Critical);
+        assert_eq!(level(0, 0), DiskLevel::Ok);
+    }
+
+    #[test]
+    fn used_pct_handles_bad_input() {
+        assert_eq!(used_pct(25, 100), 75.0);
+        assert_eq!(used_pct(200, 100), 0.0);
+        assert_eq!(used_pct(0, 0), 0.0);
     }
 
     #[test]
