@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use windows::Win32::Foundation::{COLORREF, HWND};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, DeleteDC, DeleteObject,
@@ -14,18 +15,31 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, DestroyIcon, GetSystemMetrics, HICON, ICONINFO, SM_CXSMICON, SM_CYSMICON,
 };
 
-pub const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1024;
-pub const ID_TRAY_CPU: u32 = 1;
-pub const ID_TRAY_RAM: u32 = 2;
+use crate::metrics::MetricsState;
 
-static HICON_CPU: AtomicIsize = AtomicIsize::new(0);
-static HICON_RAM: AtomicIsize = AtomicIsize::new(0);
-static TRAY_ADDED: AtomicBool = AtomicBool::new(false);
+pub const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1024;
+const ID_TRAY_CPU: u32 = 1;
+const ID_TRAY_RAM: u32 = 2;
+
+// Colors in BGR order (Windows COLORREF convention).
+const COLOR_CPU: u32 = 0x00FF9900;
+const COLOR_RAM: u32 = 0x0033CC19;
+
+/// Icons currently registered with the shell: (uID, HICON as isize).
+/// Shared between the monitoring thread and the UI thread.
+static ADDED: Mutex<Vec<(u32, isize)>> = Mutex::new(Vec::new());
+
+/// One tray icon to show on this tick.
+struct IconSpec<'a> {
+    id: u32,
+    color: u32,
+    history: &'a VecDeque<f32>,
+    tip: String,
+}
 
 fn set_tooltip(tip: &mut [u16; 128], text: &str) {
-    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let len = wide.len().min(128);
-    tip[..len].copy_from_slice(&wide[..len]);
+    let wide: Vec<u16> = text.encode_utf16().take(127).chain(std::iter::once(0)).collect();
+    tip[..wide.len()].copy_from_slice(&wide);
 }
 
 unsafe fn create_dynamic_icon(
@@ -75,7 +89,7 @@ unsafe fn create_dynamic_icon(
         };
 
         // Scale value to full icon height
-        let h = (val / 100.0 * (cy - 1) as f32) as i32;
+        let h = (val.clamp(0.0, 100.0) / 100.0 * (cy - 1) as f32) as i32;
 
         let _ = MoveToEx(hdc_mem, x, cy - 1, None);
         let _ = LineTo(hdc_mem, x, cy - 1 - h);
@@ -103,121 +117,110 @@ unsafe fn create_dynamic_icon(
         hbmMask: hbm_mask,
         hbmColor: hbm_color,
     };
-    let hicon = CreateIconIndirect(&icon_info)?;
+    let hicon = CreateIconIndirect(&icon_info);
 
     let _ = DeleteObject(HGDIOBJ(hbm_color.0));
     let _ = DeleteObject(HGDIOBJ(hbm_mask.0));
 
-    Ok(hicon)
+    hicon
 }
 
-pub fn update_tray(
-    hwnd: HWND,
-    cpu: f32,
-    ram: f32,
-    cpu_history: &VecDeque<f32>,
-    ram_history: &VecDeque<f32>,
-) {
-    let show = crate::config::SHOW_TRAY.load(Ordering::Relaxed);
-    if !show {
-        remove_tray(hwnd);
+fn base_nid(hwnd: HWND, id: u32) -> NOTIFYICONDATAW {
+    NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: id,
+        ..Default::default()
+    }
+}
+
+fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
+    let mut specs = Vec::new();
+    if crate::config::SHOW_CPU.load(Ordering::Relaxed) {
+        specs.push(IconSpec {
+            id: ID_TRAY_CPU,
+            color: COLOR_CPU,
+            history: state.cpu_history.values(),
+            tip: format!("CPU: {:.0}%", state.cpu_usage),
+        });
+    }
+    if crate::config::SHOW_RAM.load(Ordering::Relaxed) {
+        specs.push(IconSpec {
+            id: ID_TRAY_RAM,
+            color: COLOR_RAM,
+            history: state.ram_history.values(),
+            tip: format!("RAM: {:.0}%", state.ram_usage_pct),
+        });
+    }
+    specs
+}
+
+/// Adds, refreshes and removes tray icons so they match the current settings and metrics.
+pub fn update_tray(hwnd: HWND, state: &MetricsState) {
+    let specs = icon_specs(state);
+    let mut added = ADDED.lock().unwrap_or_else(|p| p.into_inner());
+    // Checked under the lock so an update cannot race past remove_tray on exit.
+    if crate::metrics::MAIN_HWND.load(Ordering::Relaxed) == 0 {
         return;
     }
 
     unsafe {
+        // Remove icons that are no longer wanted.
+        added.retain(|&(id, hicon)| {
+            if specs.iter().any(|s| s.id == id) {
+                return true;
+            }
+            let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd, id));
+            let _ = DestroyIcon(HICON(hicon as *mut _));
+            false
+        });
+
         let cx = GetSystemMetrics(SM_CXSMICON);
         let cy = GetSystemMetrics(SM_CYSMICON);
 
-        // CPU Icon (light blue: BGR format is 0x00FF9900)
-        let cpu_color = 0x00FF9900;
-        let cpu_hicon = match create_dynamic_icon(cpu_history, cpu_color, cx, cy) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        for spec in &specs {
+            let Ok(hicon) = create_dynamic_icon(spec.history, spec.color, cx, cy) else {
+                continue;
+            };
+            let mut nid = NOTIFYICONDATAW {
+                uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+                uCallbackMessage: WM_TRAY_CALLBACK,
+                hIcon: hicon,
+                ..base_nid(hwnd, spec.id)
+            };
+            set_tooltip(&mut nid.szTip, &spec.tip);
 
-        // RAM Icon (light green: BGR format is 0x0033CC19)
-        let ram_color = 0x0033CC19;
-        let ram_hicon = match create_dynamic_icon(ram_history, ram_color, cx, cy) {
-            Ok(h) => h,
-            Err(_) => {
-                let _ = DestroyIcon(cpu_hicon);
-                return;
+            if let Some(entry) = added.iter_mut().find(|(id, _)| *id == spec.id) {
+                let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+                let _ = DestroyIcon(HICON(entry.1 as *mut _));
+                entry.1 = hicon.0 as isize;
+            } else if Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
+                added.push((spec.id, hicon.0 as isize));
+            } else {
+                let _ = DestroyIcon(hicon);
             }
-        };
-
-        let mut nid_cpu = NOTIFYICONDATAW {
-            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-            hWnd: hwnd,
-            uID: ID_TRAY_CPU,
-            uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
-            uCallbackMessage: WM_TRAY_CALLBACK,
-            hIcon: cpu_hicon,
-            ..Default::default()
-        };
-        set_tooltip(&mut nid_cpu.szTip, &format!("CPU: {:.0}%", cpu));
-
-        let mut nid_ram = NOTIFYICONDATAW {
-            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-            hWnd: hwnd,
-            uID: ID_TRAY_RAM,
-            uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
-            uCallbackMessage: WM_TRAY_CALLBACK,
-            hIcon: ram_hicon,
-            ..Default::default()
-        };
-        set_tooltip(&mut nid_ram.szTip, &format!("RAM: {:.0}%", ram));
-
-        let added = TRAY_ADDED.load(Ordering::Relaxed);
-        if added {
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid_cpu);
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid_ram);
-        } else {
-            let _ = Shell_NotifyIconW(NIM_ADD, &nid_cpu);
-            let _ = Shell_NotifyIconW(NIM_ADD, &nid_ram);
-            TRAY_ADDED.store(true, Ordering::Relaxed);
-        }
-
-        // Clean up previous icon handles
-        let old_cpu = HICON_CPU.swap(cpu_hicon.0 as isize, Ordering::Relaxed);
-        if old_cpu != 0 {
-            let _ = DestroyIcon(HICON(old_cpu as *mut _));
-        }
-
-        let old_ram = HICON_RAM.swap(ram_hicon.0 as isize, Ordering::Relaxed);
-        if old_ram != 0 {
-            let _ = DestroyIcon(HICON(old_ram as *mut _));
         }
     }
 }
 
+/// Removes all tray icons; called on exit.
 pub fn remove_tray(hwnd: HWND) {
-    let added = TRAY_ADDED.swap(false, Ordering::Relaxed);
-    if added {
+    let mut added = ADDED.lock().unwrap_or_else(|p| p.into_inner());
+    for (id, hicon) in added.drain(..) {
         unsafe {
-            let nid_cpu = NOTIFYICONDATAW {
-                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-                hWnd: hwnd,
-                uID: ID_TRAY_CPU,
-                ..Default::default()
-            };
-            let nid_ram = NOTIFYICONDATAW {
-                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-                hWnd: hwnd,
-                uID: ID_TRAY_RAM,
-                ..Default::default()
-            };
-            let _ = Shell_NotifyIconW(NIM_DELETE, &nid_cpu);
-            let _ = Shell_NotifyIconW(NIM_DELETE, &nid_ram);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &base_nid(hwnd, id));
+            let _ = DestroyIcon(HICON(hicon as *mut _));
+        }
+    }
+}
 
-            let old_cpu = HICON_CPU.swap(0, Ordering::Relaxed);
-            if old_cpu != 0 {
-                let _ = DestroyIcon(HICON(old_cpu as *mut _));
-            }
-
-            let old_ram = HICON_RAM.swap(0, Ordering::Relaxed);
-            if old_ram != 0 {
-                let _ = DestroyIcon(HICON(old_ram as *mut _));
-            }
+/// Forgets registered icons after Explorer restarts (its icon list is gone),
+/// so the next update re-adds them.
+pub fn reset_after_shell_restart() {
+    let mut added = ADDED.lock().unwrap_or_else(|p| p.into_inner());
+    for (_, hicon) in added.drain(..) {
+        unsafe {
+            let _ = DestroyIcon(HICON(hicon as *mut _));
         }
     }
 }

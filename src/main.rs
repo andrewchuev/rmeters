@@ -2,7 +2,6 @@
 
 mod config;
 mod metrics;
-mod renderer;
 mod settings;
 mod tray;
 mod window;
@@ -32,9 +31,9 @@ pub fn log_info(msg: &str) {
 
 unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> BOOL {
     log_info("Ctrl+C or console event received, exiting...");
-    let raw = crate::metrics::OVERLAY_HWND.load(Ordering::Relaxed);
+    let raw = crate::metrics::MAIN_HWND.load(Ordering::Relaxed);
     if raw != 0 {
-        // SAFETY: raw is the HWND stored by main after the overlay window was created.
+        // SAFETY: raw is the HWND stored by main after the main window was created.
         let hwnd = windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void);
         let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(hwnd, WM_CLOSE, None, None);
     }
@@ -72,7 +71,7 @@ fn main() -> windows::core::Result<()> {
         }
     }
 
-    // Register a Ctrl+C handler so the overlay can be closed from the console.
+    // Register a Ctrl+C handler so the app can be closed from the console.
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), BOOL::from(true));
         log_info("Console control handler registered");
@@ -91,13 +90,12 @@ fn main() -> windows::core::Result<()> {
         log_info("COM initialized");
     }
 
+    let hwnd = window::create_main_window();
+    log_info(&format!("Main window created: HWND = {:?}", hwnd.0));
+    metrics::MAIN_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
+
     metrics::start_monitoring();
     log_info("Monitoring thread started");
-
-    let hwnd = window::create_overlay();
-    log_info(&format!("Overlay window created: HWND = {:?}", hwnd.0));
-
-    metrics::OVERLAY_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
 
     log_info("Entering message loop...");
     unsafe {
@@ -109,6 +107,8 @@ fn main() -> windows::core::Result<()> {
     }
     log_info("Message loop exited");
 
+    // Stop the monitoring thread from re-adding icons, then remove them.
+    metrics::MAIN_HWND.store(0, Ordering::Relaxed);
     tray::remove_tray(hwnd);
 
     unsafe {

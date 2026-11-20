@@ -3,41 +3,39 @@
 #![allow(clippy::cast_possible_truncation, clippy::zero_ptr)]
 
 use std::mem::size_of;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use windows::core::{w, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteObject, EndPaint,
-    FillRect, HBRUSH, HDC, HGDIOBJ, LineTo, MoveToEx, PAINTSTRUCT, PS_SOLID,
-    SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    FillRect, HBRUSH, HDC, HGDIOBJ, HMONITOR, LineTo, MonitorFromPoint, MoveToEx,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor,
+    TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     ICC_LINK_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, NMLINK, NM_CLICK,
     SetWindowTheme,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, GWLP_USERDATA, HMENU, NONCLIENTMETRICSW,
-    RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
-    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_SHOW, SW_HIDE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GetClientRect, GetCursorPos, GetDlgCtrlID, HMENU, NONCLIENTMETRICSW,
+    RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowTextW,
+    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_ERASEBKGND, WM_NOTIFY, WM_PAINT, WM_SETFONT, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU,
     WS_VISIBLE,
 };
 
-const IDC_CHK_PER_CORE: usize = 2001;
 const IDC_CHK_AUTOSTART: usize = 2002;
 const IDC_BTN_EXIT: usize = 2003;
 const IDC_BTN_CLOSE: usize = 2004;
-const IDC_CHK_OVERLAY: usize = 2005;
-const IDC_CHK_TRAY: usize = 2006;
-const IDC_CHK_LOCK: usize = 2007;
+const IDC_CHK_CPU: usize = 2008;
+const IDC_CHK_RAM: usize = 2009;
 const IDC_LBL_VERSION: usize = 3000;
 const IDC_LBL_OPTIONS: usize = 3001;
 const IDC_LBL_ABOUT: usize = 3002;
@@ -53,7 +51,25 @@ static SETTINGS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SETTINGS_FONT: AtomicIsize = AtomicIsize::new(0);
 static DARK_BG_BRUSH: AtomicIsize = AtomicIsize::new(0);
 
+const ICON_OPTION_COUNT: usize = 2;
 
+/// Icon-visibility checkboxes: (control id, label, config flag).
+fn icon_options() -> [(usize, PCWSTR, &'static AtomicBool); ICON_OPTION_COUNT] {
+    [
+        (IDC_CHK_CPU, w!("Show CPU Icon"), &crate::config::SHOW_CPU),
+        (IDC_CHK_RAM, w!("Show RAM Icon"), &crate::config::SHOW_RAM),
+    ]
+}
+
+// Vertical layout in logical pixels, derived from the number of option rows.
+const ROW_H: i32 = 22;
+const OPTIONS_TOP: i32 = 72;
+const OPTION_ROWS: i32 = ICON_OPTION_COUNT as i32 + 1; // + autostart
+const SEP_ABOUT: i32 = OPTIONS_TOP + OPTION_ROWS * ROW_H + 6;
+const ABOUT_TOP: i32 = SEP_ABOUT + 12;
+const SEP_BUTTONS: i32 = ABOUT_TOP + 70;
+const BUTTONS_TOP: i32 = SEP_BUTTONS + 12;
+const WIN_H: i32 = BUTTONS_TOP + 78;
 
 /// Scales a logical pixel value to physical pixels using the window's DPI.
 fn dpi_scale(v: i32, dpi: u32) -> i32 {
@@ -81,11 +97,6 @@ pub unsafe extern "system" fn settings_wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_CREATE => {
-            // SAFETY: lparam for WM_CREATE is always a pointer to CREATESTRUCTW
-            // as specified by the Win32 API contract.
-            let cs = &*(lparam.0 as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
-
             let Ok(hmod) = GetModuleHandleW(None) else { return LRESULT(-1) };
 
             let mut ncm = NONCLIENTMETRICSW {
@@ -110,11 +121,7 @@ pub unsafe extern "system" fn settings_wnd_proc(
             let fwp = WPARAM(hfont.0 as usize);
             let dpi = GetDpiForWindow(hwnd);
 
-            let show_per_core = crate::config::SHOW_PER_CORE.load(Ordering::Relaxed);
-            let autostart     = crate::config::AUTOSTART_ENABLED.load(Ordering::Relaxed);
-            let show_overlay  = crate::config::SHOW_OVERLAY.load(Ordering::Relaxed);
-            let show_tray     = crate::config::SHOW_TRAY.load(Ordering::Relaxed);
-            let lock_to_task  = crate::config::LOCK_TO_TASKBAR.load(Ordering::Relaxed);
+            let autostart = crate::config::AUTOSTART_ENABLED.load(Ordering::Relaxed);
 
             macro_rules! ctrl {
                 ($class:expr, $text:expr, $style:expr, $x:expr, $y:expr, $w:expr, $h:expr, $id:expr) => {{
@@ -137,37 +144,20 @@ pub unsafe extern "system" fn settings_wnd_proc(
             if let Ok(l) = ctrl!(w!("STATIC"), w!("OPTIONS"), 0, 16, 52, 80, 16, IDC_LBL_OPTIONS) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
-            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Show CPU per Core"),
-                BS_AUTOCHECKBOX as u32, 16, 72, 248, 22, IDC_CHK_PER_CORE)
-            {
-                SendMessageW(c, BM_SETCHECK, WPARAM(show_per_core as usize), LPARAM(0));
-                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
-                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
-            }
-            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Show Taskbar Overlay"),
-                BS_AUTOCHECKBOX as u32, 16, 94, 248, 22, IDC_CHK_OVERLAY)
-            {
-                SendMessageW(c, BM_SETCHECK, WPARAM(show_overlay as usize), LPARAM(0));
-                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
-                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
-            }
-            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Lock Overlay to Taskbar"),
-                BS_AUTOCHECKBOX as u32, 16, 116, 248, 22, IDC_CHK_LOCK)
-            {
-                SendMessageW(c, BM_SETCHECK, WPARAM(lock_to_task as usize), LPARAM(0));
-                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
-                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
-                let _ = EnableWindow(c, windows::Win32::Foundation::BOOL::from(show_overlay));
-            }
-            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Show Tray Icons"),
-                BS_AUTOCHECKBOX as u32, 16, 138, 248, 22, IDC_CHK_TRAY)
-            {
-                SendMessageW(c, BM_SETCHECK, WPARAM(show_tray as usize), LPARAM(0));
-                SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
-                let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
+            let mut row_y = OPTIONS_TOP;
+            for (id, label, flag) in icon_options() {
+                if let Ok(c) = ctrl!(w!("BUTTON"), label,
+                    BS_AUTOCHECKBOX as u32, 16, row_y, 248, ROW_H, id)
+                {
+                    let checked = flag.load(Ordering::Relaxed);
+                    SendMessageW(c, BM_SETCHECK, WPARAM(checked as usize), LPARAM(0));
+                    SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
+                    let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
+                }
+                row_y += ROW_H;
             }
             if let Ok(c) = ctrl!(w!("BUTTON"), w!("Start with Windows"),
-                BS_AUTOCHECKBOX as u32, 16, 160, 248, 22, IDC_CHK_AUTOSTART)
+                BS_AUTOCHECKBOX as u32, 16, row_y, 248, ROW_H, IDC_CHK_AUTOSTART)
             {
                 SendMessageW(c, BM_SETCHECK, WPARAM(autostart as usize), LPARAM(0));
                 SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
@@ -175,19 +165,19 @@ pub unsafe extern "system" fn settings_wnd_proc(
             }
 
             // ── About ──────────────────────────────────────────────────────
-            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, 16, 200, 80, 16, IDC_LBL_ABOUT) {
+            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, 16, ABOUT_TOP, 80, 16, IDC_LBL_ABOUT) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
             if let Ok(l) = ctrl!(w!("SysLink"),
                 w!("<a href=\"https://rmeters.reslab.pro\">rmeters.reslab.pro</a>"),
-                0, 16, 220, 248, 18, 0usize)
+                0, 16, ABOUT_TOP + 20, 248, 18, 0usize)
             {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
             }
             if let Ok(l) = ctrl!(w!("SysLink"),
                 w!("<a href=\"mailto:andrew.chuev@gmail.com\">andrew.chuev@gmail.com</a>"),
-                0, 16, 242, 248, 18, 0usize)
+                0, 16, ABOUT_TOP + 42, 248, 18, 0usize)
             {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
@@ -195,13 +185,13 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             // ── Buttons ────────────────────────────────────────────────────
             if let Ok(b) = ctrl!(w!("BUTTON"), w!("Exit RMeters"),
-                BS_PUSHBUTTON as u32, 16, 282, 120, 28, IDC_BTN_EXIT)
+                BS_PUSHBUTTON as u32, 16, BUTTONS_TOP, 120, 28, IDC_BTN_EXIT)
             {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
             }
             if let Ok(b) = ctrl!(w!("BUTTON"), w!("Close"),
-                BS_PUSHBUTTON as u32, 144, 282, 120, 28, IDC_BTN_CLOSE)
+                BS_PUSHBUTTON as u32, 144, BUTTONS_TOP, 120, 28, IDC_BTN_CLOSE)
             {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
@@ -231,7 +221,7 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             let pen = CreatePen(PS_SOLID, 1, COLORREF(COLOR_SEP));
             let old = SelectObject(hdc, HGDIOBJ(pen.0));
-            for y in [dpi_scale(40, dpi), dpi_scale(188, dpi), dpi_scale(270, dpi)] {
+            for y in [dpi_scale(40, dpi), dpi_scale(SEP_ABOUT, dpi), dpi_scale(SEP_BUTTONS, dpi)] {
                 let _ = MoveToEx(hdc, x1, y, None);
                 let _ = LineTo(hdc, x2, y);
             }
@@ -284,55 +274,20 @@ pub unsafe extern "system" fn settings_wnd_proc(
             let ctrl   = HWND(lparam.0 as *mut _);
 
             if notify == BN_CLICKED {
+                if let Some((_, _, flag)) = icon_options().into_iter().find(|o| o.0 == id) {
+                    let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
+                    flag.store(checked, Ordering::Relaxed);
+                    if crate::config::any_icon_enabled() {
+                        // The monitoring thread applies the change on its next tick.
+                        crate::config::save_config();
+                    } else {
+                        // Keep at least one tray icon so settings stay reachable.
+                        flag.store(true, Ordering::Relaxed);
+                        SendMessageW(ctrl, BM_SETCHECK, WPARAM(1), LPARAM(0));
+                    }
+                    return LRESULT(0);
+                }
                 match id {
-                    IDC_CHK_PER_CORE => {
-                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
-                        crate::config::SHOW_PER_CORE.store(checked, Ordering::Relaxed);
-                        crate::config::save_config();
-                        let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
-                        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(overlay, None, false);
-                    }
-                    IDC_CHK_OVERLAY => {
-                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
-                        let tray_checked = crate::config::SHOW_TRAY.load(Ordering::Relaxed);
-                        if !checked && !tray_checked {
-                            SendMessageW(ctrl, BM_SETCHECK, WPARAM(1), LPARAM(0));
-                        } else {
-                            crate::config::SHOW_OVERLAY.store(checked, Ordering::Relaxed);
-                            crate::config::save_config();
-                            let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
-                            if checked {
-                                let _ = ShowWindow(overlay, SW_SHOW);
-                                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(overlay, None, false);
-                            } else {
-                                let _ = ShowWindow(overlay, SW_HIDE);
-                            }
-                            if let Ok(lock_ctrl) = windows::Win32::UI::WindowsAndMessaging::GetDlgItem(hwnd, IDC_CHK_LOCK as i32) {
-                                let _ = EnableWindow(lock_ctrl, windows::Win32::Foundation::BOOL::from(checked));
-                            }
-                        }
-                    }
-                    IDC_CHK_LOCK => {
-                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
-                        crate::config::LOCK_TO_TASKBAR.store(checked, Ordering::Relaxed);
-                        crate::config::save_config();
-                        let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
-                        crate::window::reposition_window(overlay);
-                    }
-                    IDC_CHK_TRAY => {
-                        let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
-                        let overlay_checked = crate::config::SHOW_OVERLAY.load(Ordering::Relaxed);
-                        if !checked && !overlay_checked {
-                            SendMessageW(ctrl, BM_SETCHECK, WPARAM(1), LPARAM(0));
-                        } else {
-                            crate::config::SHOW_TRAY.store(checked, Ordering::Relaxed);
-                            crate::config::save_config();
-                            let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
-                            if !checked {
-                                crate::tray::remove_tray(overlay);
-                            }
-                        }
-                    }
                     IDC_CHK_AUTOSTART => {
                         let checked = SendMessageW(ctrl, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
                         match crate::config::set_autostart(checked) {
@@ -345,9 +300,11 @@ pub unsafe extern "system" fn settings_wnd_proc(
                         }
                     }
                     IDC_BTN_EXIT => {
-                        let overlay = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut _);
                         let _ = DestroyWindow(hwnd);
-                        let _ = DestroyWindow(overlay);
+                        let main = crate::metrics::MAIN_HWND.load(Ordering::Relaxed);
+                        if main != 0 {
+                            let _ = DestroyWindow(HWND(main as *mut _));
+                        }
                     }
                     IDC_BTN_CLOSE => {
                         let _ = DestroyWindow(hwnd);
@@ -379,9 +336,9 @@ pub unsafe extern "system" fn settings_wnd_proc(
     }
 }
 
-/// Opens the settings window centered on the monitor containing the overlay.
+/// Opens the settings window centered on the monitor under the cursor (the clicked tray icon).
 /// If the window is already open, brings it to the foreground instead.
-pub fn show_settings(overlay_hwnd: HWND) {
+pub fn show_settings() {
     unsafe {
         if let Some(existing) = get_settings_hwnd() {
             let _ = SetForegroundWindow(existing);
@@ -407,23 +364,28 @@ pub fn show_settings(overlay_hwnd: HWND) {
         };
         RegisterClassW(&wc);
 
-        let dpi = GetDpiForWindow(overlay_hwnd);
-        let scale = dpi as f32 / 96.0;
-        let win_w = (280.0 * scale) as i32;
-        let win_h = (360.0 * scale) as i32;
+        let hmon = cursor_monitor();
+        let mut dpi_x = 96u32;
+        let mut dpi_y = 96u32;
+        let _ = GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+        let win_w = dpi_scale(280, dpi_x);
+        let win_h = dpi_scale(WIN_H, dpi_x);
 
-        let (x, y) = center_on_monitor(overlay_hwnd, win_w, win_h);
+        let (x, y) = center_on_monitor(hmon, win_w, win_h);
 
         if let Ok(hwnd) = CreateWindowExW(
             WINDOW_EX_STYLE(0), class_name, w!("RMeters \u{2014} Settings"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             x, y, win_w, win_h,
             None, HMENU::default(), hmod,
-            Some(overlay_hwnd.0 as *const _),
+            None,
         ) {
             set_window_icon(hwnd);
             apply_dark_titlebar(hwnd);
             let _ = ShowWindow(hwnd, SW_SHOW);
+            // Tray clicks do not give us foreground rights by default; the shell
+            // allows it right after a notification-icon callback.
+            let _ = SetForegroundWindow(hwnd);
         }
     }
 }
@@ -452,11 +414,14 @@ unsafe fn apply_dark_titlebar(hwnd: HWND) {
     );
 }
 
-unsafe fn center_on_monitor(ref_hwnd: HWND, win_w: i32, win_h: i32) -> (i32, i32) {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    let hmon = MonitorFromWindow(ref_hwnd, MONITOR_DEFAULTTONEAREST);
+unsafe fn cursor_monitor() -> HMONITOR {
+    let mut pt = POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+}
+
+unsafe fn center_on_monitor(hmon: HMONITOR, win_w: i32, win_h: i32) -> (i32, i32) {
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
     let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
     if GetMonitorInfoW(hmon, &mut mi).as_bool() {
         let rc = mi.rcWork;

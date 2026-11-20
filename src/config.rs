@@ -1,18 +1,13 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
 use std::path::PathBuf;
 
-pub static SHOW_PER_CORE: AtomicBool = AtomicBool::new(false);
 pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
-pub static OVERLAY_X: AtomicI32 = AtomicI32::new(-1);
-pub static OVERLAY_Y: AtomicI32 = AtomicI32::new(-1);
-pub static SHOW_OVERLAY: AtomicBool = AtomicBool::new(true);
-pub static SHOW_TRAY: AtomicBool = AtomicBool::new(false);
-pub static LOCK_TO_TASKBAR: AtomicBool = AtomicBool::new(true);
+pub static SHOW_CPU: AtomicBool = AtomicBool::new(true);
+pub static SHOW_RAM: AtomicBool = AtomicBool::new(true);
 
 fn config_path() -> PathBuf {
-    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
-    PathBuf::from(base).join("rmeters").join("config.txt")
+    data_dir().join("config.txt")
 }
 
 /// Returns the directory used for all rmeters data files (config, log).
@@ -32,28 +27,26 @@ pub fn load_config() {
                 if key == key_name { Some(val) } else { None }
             })
         };
+        let flag = |key_name: &str, default: bool| -> bool {
+            parse(key_name).map(|v| v == "true").unwrap_or(default)
+        };
 
-        let show = parse("show_per_core").map(|v| v == "true").unwrap_or(false);
-        SHOW_PER_CORE.store(show, Ordering::Relaxed);
+        SHOW_CPU.store(flag("show_cpu", true), Ordering::Relaxed);
+        SHOW_RAM.store(flag("show_ram", true), Ordering::Relaxed);
+    }
 
-        let x = parse("overlay_x").and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
-        OVERLAY_X.store(x, Ordering::Relaxed);
-
-        let y = parse("overlay_y").and_then(|v| v.parse::<i32>().ok()).unwrap_or(-1);
-        OVERLAY_Y.store(y, Ordering::Relaxed);
-
-        let show_overlay = parse("show_overlay").map(|v| v == "true").unwrap_or(true);
-        SHOW_OVERLAY.store(show_overlay, Ordering::Relaxed);
-
-        let show_tray = parse("show_tray").map(|v| v == "true").unwrap_or(false);
-        SHOW_TRAY.store(show_tray, Ordering::Relaxed);
-
-        let lock_to_taskbar = parse("lock_to_taskbar").map(|v| v == "true").unwrap_or(true);
-        LOCK_TO_TASKBAR.store(lock_to_taskbar, Ordering::Relaxed);
+    // Tray icons are the only UI, so never start with all of them hidden.
+    if !any_icon_enabled() {
+        SHOW_CPU.store(true, Ordering::Relaxed);
     }
 
     // Sync autostart status with the Windows Registry.
     AUTOSTART_ENABLED.store(is_autostart_enabled(), Ordering::Relaxed);
+}
+
+/// Returns true when at least one tray icon group is enabled.
+pub fn any_icon_enabled() -> bool {
+    SHOW_CPU.load(Ordering::Relaxed) || SHOW_RAM.load(Ordering::Relaxed)
 }
 
 /// Persists current configuration to %APPDATA%\rmeters\config.txt.
@@ -65,22 +58,14 @@ pub fn save_config() {
             return;
         }
     }
-    let per_core = SHOW_PER_CORE.load(Ordering::Relaxed);
-    let overlay_x = OVERLAY_X.load(Ordering::Relaxed);
-    let overlay_y = OVERLAY_Y.load(Ordering::Relaxed);
-    let show_overlay = SHOW_OVERLAY.load(Ordering::Relaxed);
-    let show_tray = SHOW_TRAY.load(Ordering::Relaxed);
-    let lock_to_taskbar = LOCK_TO_TASKBAR.load(Ordering::Relaxed);
+    let show_cpu = SHOW_CPU.load(Ordering::Relaxed);
+    let show_ram = SHOW_RAM.load(Ordering::Relaxed);
 
     if let Err(e) = fs::write(
         path,
         format!(
-            "show_per_core: {per_core}\n\
-             overlay_x: {overlay_x}\n\
-             overlay_y: {overlay_y}\n\
-             show_overlay: {show_overlay}\n\
-             show_tray: {show_tray}\n\
-             lock_to_taskbar: {lock_to_taskbar}\n"
+            "show_cpu: {show_cpu}\n\
+             show_ram: {show_ram}\n"
         ),
     ) {
         crate::log_info(&format!("save_config: write failed: {e}"));
