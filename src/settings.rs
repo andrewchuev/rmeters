@@ -17,7 +17,9 @@ use windows::Win32::UI::Controls::{
     ICC_LINK_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, NMLINK, NM_CLICK,
     SetWindowTheme,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{
+    AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI,
+};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
@@ -64,14 +66,30 @@ fn icon_options() -> [(usize, PCWSTR, &'static AtomicBool); ICON_OPTION_COUNT] {
 }
 
 // Vertical layout in logical pixels, derived from the number of option rows.
+// All values are client-area coordinates; the window size is derived from them.
+const PAD: i32 = 16; // outer margin on every side
+const SEP_GAP: i32 = 12; // space above and below each separator
+const CLIENT_W: i32 = 280;
+const CONTENT_W: i32 = CLIENT_W - 2 * PAD;
+const BTN_GAP: i32 = 8;
+const BTN_W: i32 = (CONTENT_W - BTN_GAP) / 2;
+const BTN_H: i32 = 28;
 const ROW_H: i32 = 22;
-const OPTIONS_TOP: i32 = 72;
+const LABEL_H: i32 = 16;
+const LINK_H: i32 = 18;
+const VERSION_H: i32 = 20;
+
+const VERSION_TOP: i32 = PAD;
+const SEP_OPTIONS: i32 = VERSION_TOP + VERSION_H + SEP_GAP;
+const OPTIONS_LABEL_TOP: i32 = SEP_OPTIONS + SEP_GAP;
+const OPTIONS_TOP: i32 = OPTIONS_LABEL_TOP + LABEL_H + 4;
 const OPTION_ROWS: i32 = ICON_OPTION_COUNT as i32 + 1; // + autostart
-const SEP_ABOUT: i32 = OPTIONS_TOP + OPTION_ROWS * ROW_H + 6;
-const ABOUT_TOP: i32 = SEP_ABOUT + 12;
-const SEP_BUTTONS: i32 = ABOUT_TOP + 70;
-const BUTTONS_TOP: i32 = SEP_BUTTONS + 12;
-const WIN_H: i32 = BUTTONS_TOP + 78;
+const SEP_ABOUT: i32 = OPTIONS_TOP + OPTION_ROWS * ROW_H + SEP_GAP;
+const ABOUT_TOP: i32 = SEP_ABOUT + SEP_GAP;
+const LINKS_TOP: i32 = ABOUT_TOP + LABEL_H + 4;
+const SEP_BUTTONS: i32 = LINKS_TOP + 2 * LINK_H + 4 + SEP_GAP;
+const BUTTONS_TOP: i32 = SEP_BUTTONS + SEP_GAP;
+const CLIENT_H: i32 = BUTTONS_TOP + BTN_H + PAD;
 
 /// Scales a logical pixel value to physical pixels using the window's DPI.
 fn dpi_scale(v: i32, dpi: u32) -> i32 {
@@ -137,19 +155,19 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             // ── Version label ──────────────────────────────────────────────
             let ver = HSTRING::from(format!("RMeters  v{}", env!("CARGO_PKG_VERSION")));
-            if let Ok(l) = ctrl!(w!("STATIC"), w!(""), 0, 16, 14, 248, 20, IDC_LBL_VERSION) {
+            if let Ok(l) = ctrl!(w!("STATIC"), w!(""), 0, PAD, VERSION_TOP, CONTENT_W, VERSION_H, IDC_LBL_VERSION) {
                 let _ = SetWindowTextW(l, &ver);
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
 
             // ── Options ────────────────────────────────────────────────────
-            if let Ok(l) = ctrl!(w!("STATIC"), w!("OPTIONS"), 0, 16, 52, 80, 16, IDC_LBL_OPTIONS) {
+            if let Ok(l) = ctrl!(w!("STATIC"), w!("OPTIONS"), 0, PAD, OPTIONS_LABEL_TOP, CONTENT_W, LABEL_H, IDC_LBL_OPTIONS) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
             let mut row_y = OPTIONS_TOP;
             for (id, label, flag) in icon_options() {
                 if let Ok(c) = ctrl!(w!("BUTTON"), label,
-                    BS_AUTOCHECKBOX as u32, 16, row_y, 248, ROW_H, id)
+                    BS_AUTOCHECKBOX as u32, PAD, row_y, CONTENT_W, ROW_H, id)
                 {
                     let checked = flag.load(Ordering::Relaxed);
                     SendMessageW(c, BM_SETCHECK, WPARAM(checked as usize), LPARAM(0));
@@ -159,7 +177,7 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 row_y += ROW_H;
             }
             if let Ok(c) = ctrl!(w!("BUTTON"), w!("Start with Windows"),
-                BS_AUTOCHECKBOX as u32, 16, row_y, 248, ROW_H, IDC_CHK_AUTOSTART)
+                BS_AUTOCHECKBOX as u32, PAD, row_y, CONTENT_W, ROW_H, IDC_CHK_AUTOSTART)
             {
                 SendMessageW(c, BM_SETCHECK, WPARAM(autostart as usize), LPARAM(0));
                 SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
@@ -167,19 +185,19 @@ pub unsafe extern "system" fn settings_wnd_proc(
             }
 
             // ── About ──────────────────────────────────────────────────────
-            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, 16, ABOUT_TOP, 80, 16, IDC_LBL_ABOUT) {
+            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, PAD, ABOUT_TOP, CONTENT_W, LABEL_H, IDC_LBL_ABOUT) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
             if let Ok(l) = ctrl!(w!("SysLink"),
                 w!("<a href=\"https://rmeters.reslab.pro\">rmeters.reslab.pro</a>"),
-                0, 16, ABOUT_TOP + 20, 248, 18, 0usize)
+                0, PAD, LINKS_TOP, CONTENT_W, LINK_H, 0usize)
             {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
             }
             if let Ok(l) = ctrl!(w!("SysLink"),
                 w!("<a href=\"mailto:andrew.chuev@gmail.com\">andrew.chuev@gmail.com</a>"),
-                0, 16, ABOUT_TOP + 42, 248, 18, 0usize)
+                0, PAD, LINKS_TOP + LINK_H + 4, CONTENT_W, LINK_H, 0usize)
             {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
@@ -187,13 +205,13 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             // ── Buttons ────────────────────────────────────────────────────
             if let Ok(b) = ctrl!(w!("BUTTON"), w!("Exit RMeters"),
-                BS_PUSHBUTTON as u32, 16, BUTTONS_TOP, 120, 28, IDC_BTN_EXIT)
+                BS_PUSHBUTTON as u32, PAD, BUTTONS_TOP, BTN_W, BTN_H, IDC_BTN_EXIT)
             {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
             }
             if let Ok(b) = ctrl!(w!("BUTTON"), w!("Close"),
-                BS_PUSHBUTTON as u32, 144, BUTTONS_TOP, 120, 28, IDC_BTN_CLOSE)
+                BS_PUSHBUTTON as u32, CLIENT_W - PAD - BTN_W, BUTTONS_TOP, BTN_W, BTN_H, IDC_BTN_CLOSE)
             {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
@@ -218,12 +236,12 @@ pub unsafe extern "system" fn settings_wnd_proc(
             let dpi = GetDpiForWindow(hwnd);
             let mut rc = RECT::default();
             let _ = GetClientRect(hwnd, &mut rc);
-            let x1 = dpi_scale(16, dpi);
-            let x2 = rc.right - dpi_scale(16, dpi);
+            let x1 = dpi_scale(PAD, dpi);
+            let x2 = rc.right - dpi_scale(PAD, dpi);
 
             let pen = CreatePen(PS_SOLID, 1, COLORREF(COLOR_SEP));
             let old = SelectObject(hdc, HGDIOBJ(pen.0));
-            for y in [dpi_scale(40, dpi), dpi_scale(SEP_ABOUT, dpi), dpi_scale(SEP_BUTTONS, dpi)] {
+            for y in [dpi_scale(SEP_OPTIONS, dpi), dpi_scale(SEP_ABOUT, dpi), dpi_scale(SEP_BUTTONS, dpi)] {
                 let _ = MoveToEx(hdc, x1, y, None);
                 let _ = LineTo(hdc, x2, y);
             }
@@ -370,14 +388,23 @@ pub fn show_settings() {
         let mut dpi_x = 96u32;
         let mut dpi_y = 96u32;
         let _ = GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-        let win_w = dpi_scale(280, dpi_x);
-        let win_h = dpi_scale(WIN_H, dpi_x);
+        // The layout is in client coordinates; add the title bar and borders on top.
+        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: dpi_scale(CLIENT_W, dpi_x),
+            bottom: dpi_scale(CLIENT_H, dpi_x),
+        };
+        let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi_x);
+        let win_w = rc.right - rc.left;
+        let win_h = rc.bottom - rc.top;
 
         let (x, y) = center_on_monitor(hmon, win_w, win_h);
 
         if let Ok(hwnd) = CreateWindowExW(
             WINDOW_EX_STYLE(0), class_name, w!("RMeters \u{2014} Settings"),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+            style,
             x, y, win_w, win_h,
             None, HMENU::default(), hmod,
             None,
