@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use windows::Win32::Foundation::{COLORREF, HWND};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, DeleteDC, DeleteObject,
-    GetDC, HGDIOBJ, LineTo, MoveToEx, PatBlt, ReleaseDC, SelectObject, BLACKNESS, PS_SOLID,
-    WHITENESS,
+    CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, CreateSolidBrush,
+    DeleteDC, DeleteObject, FillRect, GetDC, HGDIOBJ, LineTo, MoveToEx, PatBlt, ReleaseDC,
+    SelectObject, BLACKNESS, PS_SOLID, WHITENESS,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -29,6 +29,8 @@ const COLOR_RAM: u32 = 0x0033CC19;
 const COLOR_DISK_OK: u32 = 0x00FF66CC; // violet
 const COLOR_DISK_WARN: u32 = 0x0000D2FF; // yellow
 const COLOR_DISK_CRIT: u32 = 0x003C3CFF; // red
+/// Graph color drawn over a filled alert background.
+const COLOR_ON_ALERT: u32 = 0x00141414;
 
 // Used-space thresholds in percent, matching when Explorer turns a drive bar red.
 const DISK_WARN_PCT: f64 = 80.0;
@@ -64,6 +66,8 @@ static ADDED: Mutex<Vec<(u32, isize)>> = Mutex::new(Vec::new());
 struct IconSpec<'a> {
     id: u32,
     color: u32,
+    /// Opaque fill behind the graph; None keeps the background transparent.
+    background: Option<u32>,
     history: &'a VecDeque<f32>,
     tip: String,
 }
@@ -76,6 +80,7 @@ fn set_tooltip(tip: &mut [u16; 128], text: &str) {
 unsafe fn create_dynamic_icon(
     history: &VecDeque<f32>,
     color: u32,
+    background: Option<u32>,
     cx: i32,
     cy: i32,
 ) -> Result<HICON, windows::core::Error> {
@@ -84,8 +89,17 @@ unsafe fn create_dynamic_icon(
     let hbm_color = CreateCompatibleBitmap(hdc_screen, cx, cy);
     let old_color_bitmap = SelectObject(hdc_mem, HGDIOBJ(hbm_color.0));
 
-    // Fill color bitmap with black (opaque base for transparent icon)
-    let _ = PatBlt(hdc_mem, 0, 0, cx, cy, BLACKNESS);
+    // Black where the mask is transparent; the fill color where it is opaque.
+    match background {
+        Some(bg) => {
+            let brush = CreateSolidBrush(COLORREF(bg));
+            FillRect(hdc_mem, &RECT { left: 0, top: 0, right: cx, bottom: cy }, brush);
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+        }
+        None => {
+            let _ = PatBlt(hdc_mem, 0, 0, cx, cy, BLACKNESS);
+        }
+    }
 
     let hbm_mask = CreateBitmap(cx, cy, 1, 1, None);
     if hbm_mask.0.is_null() {
@@ -98,8 +112,9 @@ unsafe fn create_dynamic_icon(
     let hdc_mask = CreateCompatibleDC(hdc_screen);
     let old_mask_bitmap = SelectObject(hdc_mask, HGDIOBJ(hbm_mask.0));
 
-    // Fill mask bitmap with white (1 = transparent)
-    let _ = PatBlt(hdc_mask, 0, 0, cx, cy, WHITENESS);
+    // Mask: white (1) = transparent, black (0) = opaque.
+    let mask_fill = if background.is_some() { BLACKNESS } else { WHITENESS };
+    let _ = PatBlt(hdc_mask, 0, 0, cx, cy, mask_fill);
 
     // Setup pens (glowing color and black mask pen)
     let pen_graph = CreatePen(PS_SOLID, 1, COLORREF(color));
@@ -172,6 +187,7 @@ fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
         specs.push(IconSpec {
             id: ID_TRAY_CPU,
             color: COLOR_CPU,
+            background: None,
             history: state.cpu_history.values(),
             tip: format!("CPU: {:.0}%", state.cpu_usage),
         });
@@ -180,20 +196,26 @@ fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
         specs.push(IconSpec {
             id: ID_TRAY_RAM,
             color: COLOR_RAM,
+            background: None,
             history: state.ram_history.values(),
             tip: format!("RAM: {:.0}%", state.ram_usage_pct),
         });
     }
     if crate::config::SHOW_DISKS.load(Ordering::Relaxed) {
         for d in &state.disks {
-            let (color, note) = match disk_level(d.free_bytes, d.total_bytes) {
-                DiskLevel::Ok => (COLOR_DISK_OK, ""),
-                DiskLevel::Low => (COLOR_DISK_WARN, " (low space)"),
-                DiskLevel::Critical => (COLOR_DISK_CRIT, " (critically low)"),
+            // Low space fills the whole icon with the alert color so it is
+            // noticeable even when the disk is idle.
+            let (color, background, note) = match disk_level(d.free_bytes, d.total_bytes) {
+                DiskLevel::Ok => (COLOR_DISK_OK, None, ""),
+                DiskLevel::Low => (COLOR_ON_ALERT, Some(COLOR_DISK_WARN), " (low space)"),
+                DiskLevel::Critical => {
+                    (COLOR_ON_ALERT, Some(COLOR_DISK_CRIT), " (critically low)")
+                }
             };
             specs.push(IconSpec {
                 id: ID_TRAY_DISK_BASE + (d.letter as u32 - 'A' as u32),
                 color,
+                background,
                 history: d.history.values(),
                 tip: format!(
                     "Disk {}: {:.0}% active\n{} free of {}{}",
@@ -245,7 +267,7 @@ pub fn update_tray(hwnd: HWND, state: &MetricsState) {
         let cy = GetSystemMetrics(SM_CYSMICON);
 
         for spec in &specs {
-            let Ok(hicon) = create_dynamic_icon(spec.history, spec.color, cx, cy) else {
+            let Ok(hicon) = create_dynamic_icon(spec.history, spec.color, spec.background, cx, cy) else {
                 continue;
             };
             let mut nid = NOTIFYICONDATAW {
