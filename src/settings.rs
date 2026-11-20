@@ -36,6 +36,7 @@ const IDC_BTN_EXIT: usize = 2003;
 const IDC_BTN_CLOSE: usize = 2004;
 const IDC_CHK_CPU: usize = 2008;
 const IDC_CHK_RAM: usize = 2009;
+const IDC_CHK_DISKS: usize = 2010;
 const IDC_LBL_VERSION: usize = 3000;
 const IDC_LBL_OPTIONS: usize = 3001;
 const IDC_LBL_ABOUT: usize = 3002;
@@ -51,13 +52,14 @@ static SETTINGS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SETTINGS_FONT: AtomicIsize = AtomicIsize::new(0);
 static DARK_BG_BRUSH: AtomicIsize = AtomicIsize::new(0);
 
-const ICON_OPTION_COUNT: usize = 2;
+const ICON_OPTION_COUNT: usize = 3;
 
 /// Icon-visibility checkboxes: (control id, label, config flag).
 fn icon_options() -> [(usize, PCWSTR, &'static AtomicBool); ICON_OPTION_COUNT] {
     [
         (IDC_CHK_CPU, w!("Show CPU Icon"), &crate::config::SHOW_CPU),
         (IDC_CHK_RAM, w!("Show RAM Icon"), &crate::config::SHOW_RAM),
+        (IDC_CHK_DISKS, w!("Show Disk Icons"), &crate::config::SHOW_DISKS),
     ]
 }
 

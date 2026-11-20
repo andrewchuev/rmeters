@@ -1,6 +1,6 @@
 # rmeters
 
-A lightweight, high-performance system monitor for the Windows notification area (system tray), written in Rust. It shows real-time CPU and RAM load as tiny scrolling graphs right next to the clock, in the spirit of the classic xMeters utility.
+A lightweight, high-performance system monitor for the Windows notification area (system tray), written in Rust. It shows real-time CPU, RAM and disk load as tiny scrolling graphs right next to the clock, in the spirit of the classic xMeters utility.
 
 **[Download Latest Release](https://github.com/andrewchuev/rmeters/releases/latest)**
 
@@ -8,7 +8,8 @@ A lightweight, high-performance system monitor for the Windows notification area
 
 ## Features
 
-- **Tray Icons**: Real-time scrolling sparkline graphs (rolling history) for CPU and RAM load in the system tray. Hover an icon for the exact value.
+- **Tray Icons**: Real-time scrolling sparkline graphs (rolling 60-second history) for CPU (blue) and RAM (green) load in the system tray. Hover an icon for the exact value.
+- **Disk Icons**: One orange icon per local fixed volume (C:, D:, …) graphing its active time, the same metric Task Manager shows. The tooltip shows the drive letter, active time and free space. Volumes that appear or disappear are picked up automatically; removable and network drives are not shown.
 - **Per-Icon Toggles**: Each icon can be shown or hidden individually; at least one always stays visible so the settings remain reachable.
 - **Settings Window**: Click (left or right) any tray icon to open the Settings window — toggle icons, autostart, or exit the app.
 - **No Dependencies**: Statically linked against the C runtime — runs on a clean Windows install without installing Visual C++ Redistributable.
@@ -40,6 +41,7 @@ Click any rmeters tray icon to open the Settings window:
 |---|---|
 | Show CPU Icon | Show or hide the CPU load graph icon |
 | Show RAM Icon | Show or hide the RAM usage graph icon |
+| Show Disk Icons | Show or hide the per-volume disk activity icons |
 | Start with Windows | Enable / disable autostart via the registry |
 | Exit RMeters | Quit the application |
 
@@ -67,6 +69,7 @@ The compiled binary will be at `target/release/rmeters.exe`.
 ## How it Works
 
 - **Metrics Collection**: A background thread polls CPU and memory stats every second using the `sysinfo` crate, initialized lazily with `System::new()` to avoid full-system scans.
+- **Disk Activity**: Fixed volumes are found with `GetLogicalDrives` + `GetDriveTypeW`. Active time is `100 − \LogicalDisk(X:)\% Idle Time` read through the Performance Data Helper (PDH) API; free space comes from `GetDiskFreeSpaceExW`.
 - **Icons**: Each tick, every enabled icon is drawn as a GDI sparkline into a fresh `HICON` (color bitmap plus transparency mask) and pushed to the shell with `Shell_NotifyIconW`; the previous handle is destroyed.
 - **Hidden Main Window**: A never-shown top-level window owns the icons and receives their click callbacks. It is not a message-only window, so it also receives the `TaskbarCreated` broadcast used to re-add icons after an Explorer restart.
 - **Architecture & Reliability**:

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
 pub static SHOW_CPU: AtomicBool = AtomicBool::new(true);
 pub static SHOW_RAM: AtomicBool = AtomicBool::new(true);
+pub static SHOW_DISKS: AtomicBool = AtomicBool::new(true);
 
 fn config_path() -> PathBuf {
     data_dir().join("config.txt")
@@ -33,6 +34,7 @@ pub fn load_config() {
 
         SHOW_CPU.store(flag("show_cpu", true), Ordering::Relaxed);
         SHOW_RAM.store(flag("show_ram", true), Ordering::Relaxed);
+        SHOW_DISKS.store(flag("show_disks", true), Ordering::Relaxed);
     }
 
     // Tray icons are the only UI, so never start with all of them hidden.
@@ -46,7 +48,9 @@ pub fn load_config() {
 
 /// Returns true when at least one tray icon group is enabled.
 pub fn any_icon_enabled() -> bool {
-    SHOW_CPU.load(Ordering::Relaxed) || SHOW_RAM.load(Ordering::Relaxed)
+    SHOW_CPU.load(Ordering::Relaxed)
+        || SHOW_RAM.load(Ordering::Relaxed)
+        || SHOW_DISKS.load(Ordering::Relaxed)
 }
 
 /// Persists current configuration to %APPDATA%\rmeters\config.txt.
@@ -60,12 +64,14 @@ pub fn save_config() {
     }
     let show_cpu = SHOW_CPU.load(Ordering::Relaxed);
     let show_ram = SHOW_RAM.load(Ordering::Relaxed);
+    let show_disks = SHOW_DISKS.load(Ordering::Relaxed);
 
     if let Err(e) = fs::write(
         path,
         format!(
             "show_cpu: {show_cpu}\n\
-             show_ram: {show_ram}\n"
+             show_ram: {show_ram}\n\
+             show_disks: {show_disks}\n"
         ),
     ) {
         crate::log_info(&format!("save_config: write failed: {e}"));

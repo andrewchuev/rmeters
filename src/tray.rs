@@ -20,10 +20,13 @@ use crate::metrics::MetricsState;
 pub const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1024;
 const ID_TRAY_CPU: u32 = 1;
 const ID_TRAY_RAM: u32 = 2;
+/// Disk icons use ID_TRAY_DISK_BASE + drive index (A: = 0 … Z: = 25).
+const ID_TRAY_DISK_BASE: u32 = 100;
 
 // Colors in BGR order (Windows COLORREF convention).
 const COLOR_CPU: u32 = 0x00FF9900;
 const COLOR_RAM: u32 = 0x0033CC19;
+const COLOR_DISK: u32 = 0x0000AAFF;
 
 /// Icons currently registered with the shell: (uID, HICON as isize).
 /// Shared between the monitoring thread and the UI thread.
@@ -88,8 +91,9 @@ unsafe fn create_dynamic_icon(
             0.0
         };
 
-        // Scale value to full icon height
-        let h = (val.clamp(0.0, 100.0) / 100.0 * (cy - 1) as f32) as i32;
+        // Scale value to full icon height. At least one pixel is drawn so an idle
+        // metric (e.g. a quiet disk) still shows a baseline instead of an invisible icon.
+        let h = ((val.clamp(0.0, 100.0) / 100.0 * (cy - 1) as f32) as i32).max(1);
 
         let _ = MoveToEx(hdc_mem, x, cy - 1, None);
         let _ = LineTo(hdc_mem, x, cy - 1 - h);
@@ -152,7 +156,35 @@ fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
             tip: format!("RAM: {:.0}%", state.ram_usage_pct),
         });
     }
+    if crate::config::SHOW_DISKS.load(Ordering::Relaxed) {
+        for d in &state.disks {
+            specs.push(IconSpec {
+                id: ID_TRAY_DISK_BASE + (d.letter as u32 - 'A' as u32),
+                color: COLOR_DISK,
+                history: d.history.values(),
+                tip: format!(
+                    "Disk {}: {:.0}% active\n{} free of {}",
+                    d.letter,
+                    d.active_pct,
+                    format_bytes(d.free_bytes),
+                    format_bytes(d.total_bytes),
+                ),
+            });
+        }
+    }
     specs
+}
+
+/// Formats a byte count with binary units, as Explorer does (but labelled GB/TB).
+fn format_bytes(bytes: u64) -> String {
+    const GB: f64 = (1u64 << 30) as f64;
+    const TB: f64 = (1u64 << 40) as f64;
+    let b = bytes as f64;
+    if b >= TB {
+        format!("{:.2} TB", b / TB)
+    } else {
+        format!("{:.1} GB", b / GB)
+    }
 }
 
 /// Adds, refreshes and removes tray icons so they match the current settings and metrics.
@@ -222,5 +254,17 @@ pub fn reset_after_shell_restart() {
         unsafe {
             let _ = DestroyIcon(HICON(hicon as *mut _));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_bytes;
+
+    #[test]
+    fn formats_gigabytes_and_terabytes() {
+        assert_eq!(format_bytes(0), "0.0 GB");
+        assert_eq!(format_bytes(512 << 30), "512.0 GB");
+        assert_eq!(format_bytes(3 << 39), "1.50 TB");
     }
 }

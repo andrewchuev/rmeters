@@ -25,11 +25,20 @@ impl History {
     }
 }
 
+pub struct DiskState {
+    pub letter: char,
+    pub active_pct: f32,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+    pub history: History,
+}
+
 pub struct MetricsState {
     pub cpu_usage: f32,
     pub ram_usage_pct: f32,
     pub cpu_history: History,
     pub ram_history: History,
+    pub disks: Vec<DiskState>,
 }
 
 impl MetricsState {
@@ -39,7 +48,31 @@ impl MetricsState {
             ram_usage_pct: 0.0,
             cpu_history: History::new(),
             ram_history: History::new(),
+            disks: Vec::new(),
         }
+    }
+
+    /// Applies fresh disk samples, keeping the history of volumes that are still present.
+    fn update_disks(&mut self, samples: Vec<crate::disk::DiskSample>) {
+        let mut old = std::mem::take(&mut self.disks);
+        self.disks = samples
+            .into_iter()
+            .map(|s| {
+                let mut history = old
+                    .iter()
+                    .position(|d| d.letter == s.letter)
+                    .map(|i| old.swap_remove(i).history)
+                    .unwrap_or_else(History::new);
+                history.push(s.active_pct);
+                DiskState {
+                    letter: s.letter,
+                    active_pct: s.active_pct,
+                    free_bytes: s.free_bytes,
+                    total_bytes: s.total_bytes,
+                    history,
+                }
+            })
+            .collect();
     }
 }
 
@@ -52,10 +85,12 @@ pub fn start_monitoring() {
     thread::spawn(|| {
         let mut sys = System::new();
         let mut state = MetricsState::new();
+        let mut disks = crate::disk::DiskMonitor::new();
 
-        // First refresh to prime CPU values (they return 0 on the very first call)
+        // First refresh to prime CPU and disk rate values (they return 0 on the very first call)
         sys.refresh_cpu_usage();
         sys.refresh_memory();
+        let _ = disks.sample();
         thread::sleep(Duration::from_millis(500));
 
         loop {
@@ -76,6 +111,11 @@ pub fn start_monitoring() {
             state.ram_usage_pct = ram_pct;
             state.cpu_history.push(cpu);
             state.ram_history.push(ram_pct);
+            if crate::config::SHOW_DISKS.load(Ordering::Relaxed) {
+                state.update_disks(disks.sample());
+            } else {
+                state.disks.clear();
+            }
 
             let raw = MAIN_HWND.load(Ordering::Relaxed);
             if raw != 0 {
@@ -88,4 +128,32 @@ pub fn start_monitoring() {
             thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::disk::DiskSample;
+
+    fn sample(letter: char, active_pct: f32) -> DiskSample {
+        DiskSample { letter, active_pct, free_bytes: 1, total_bytes: 2 }
+    }
+
+    #[test]
+    fn disk_history_survives_and_resets_per_volume() {
+        let mut state = MetricsState::new();
+        state.update_disks(vec![sample('C', 10.0)]);
+        state.update_disks(vec![sample('D', 5.0), sample('C', 20.0)]);
+
+        let c = state.disks.iter().find(|d| d.letter == 'C').unwrap();
+        let hist: Vec<f32> = c.history.values().iter().rev().take(2).copied().collect();
+        assert_eq!(hist, vec![20.0, 10.0]);
+        assert_eq!(c.history.values().len(), HISTORY_LEN);
+
+        let d = state.disks.iter().find(|d| d.letter == 'D').unwrap();
+        assert_eq!(d.history.values().iter().filter(|&&v| v != 0.0).count(), 1);
+
+        state.update_disks(vec![sample('D', 1.0)]);
+        assert_eq!(state.disks.len(), 1);
+    }
 }

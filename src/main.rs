@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod config;
+mod disk;
 mod metrics;
 mod settings;
 mod tray;
