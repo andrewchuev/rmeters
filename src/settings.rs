@@ -22,9 +22,9 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    GetClientRect, GetCursorPos, GetDlgCtrlID, HMENU, NONCLIENTMETRICSW,
+    GetClientRect, GetCursorPos, GetDlgCtrlID, HMENU, IsIconic, NONCLIENTMETRICSW,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowTextW,
-    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_RESTORE, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_ERASEBKGND, WM_NOTIFY, WM_PAINT, WM_SETFONT, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU,
@@ -343,7 +343,7 @@ pub unsafe extern "system" fn settings_wnd_proc(
 pub fn show_settings() {
     unsafe {
         if let Some(existing) = get_settings_hwnd() {
-            let _ = SetForegroundWindow(existing);
+            bring_to_front(existing);
             return;
         }
 
@@ -385,11 +385,22 @@ pub fn show_settings() {
             set_window_icon(hwnd);
             apply_dark_titlebar(hwnd);
             let _ = ShowWindow(hwnd, SW_SHOW);
-            // Tray clicks do not give us foreground rights by default; the shell
-            // allows it right after a notification-icon callback.
-            let _ = SetForegroundWindow(hwnd);
+            bring_to_front(hwnd);
         }
     }
+}
+
+unsafe fn bring_to_front(hwnd: HWND) {
+    // The process's first ShowWindow call takes the launch show state instead of
+    // the one passed (e.g. minimized when started from a minimized shortcut or a
+    // background shell). The settings window is now the first window ever shown,
+    // so restore it explicitly.
+    if IsIconic(hwnd).as_bool() {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+    }
+    // Tray clicks do not give us foreground rights by default; the shell
+    // allows it right after a notification-icon callback.
+    let _ = SetForegroundWindow(hwnd);
 }
 
 unsafe fn set_window_icon(hwnd: HWND) {
