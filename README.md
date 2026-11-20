@@ -9,7 +9,8 @@ A lightweight, high-performance system monitor for the Windows notification area
 ## Features
 
 - **Tray Icons**: Real-time scrolling sparkline graphs (rolling 60-second history) for CPU (blue) and RAM (green) load in the system tray. Hover an icon for the exact value.
-- **Disk Icons**: One orange icon per local fixed volume (C:, D:, …) graphing its active time, the same metric Task Manager shows. The tooltip shows the drive letter, active time and free space. Volumes that appear or disappear are picked up automatically; removable and network drives are not shown.
+- **Disk Icons**: One icon per local fixed volume (C:, D:, …) graphing its active time, the same metric Task Manager shows. The tooltip shows the drive letter, active time and free space.
+- **Disk Space Alerts**: The disk icon color reflects how full the volume is — violet below 80% used, yellow from 80% (low space), red from 90% (critically low). Volumes that appear or disappear are picked up automatically; removable and network drives are not shown.
 - **Per-Icon Toggles**: Each icon can be shown or hidden individually; at least one always stays visible so the settings remain reachable.
 - **Settings Window**: Click (left or right) any tray icon to open the Settings window — toggle icons, autostart, or exit the app.
 - **No Dependencies**: Statically linked against the C runtime — runs on a clean Windows install without installing Visual C++ Redistributable.

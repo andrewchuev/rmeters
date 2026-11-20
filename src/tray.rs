@@ -26,7 +26,35 @@ const ID_TRAY_DISK_BASE: u32 = 100;
 // Colors in BGR order (Windows COLORREF convention).
 const COLOR_CPU: u32 = 0x00FF9900;
 const COLOR_RAM: u32 = 0x0033CC19;
-const COLOR_DISK: u32 = 0x0000AAFF;
+const COLOR_DISK_OK: u32 = 0x00FF66CC; // violet
+const COLOR_DISK_WARN: u32 = 0x0000D2FF; // yellow
+const COLOR_DISK_CRIT: u32 = 0x003C3CFF; // red
+
+// Used-space thresholds in percent, matching when Explorer turns a drive bar red.
+const DISK_WARN_PCT: f64 = 80.0;
+const DISK_CRIT_PCT: f64 = 90.0;
+
+#[derive(Debug, PartialEq)]
+enum DiskLevel {
+    Ok,
+    Low,
+    Critical,
+}
+
+fn disk_level(free_bytes: u64, total_bytes: u64) -> DiskLevel {
+    if total_bytes == 0 {
+        return DiskLevel::Ok;
+    }
+    let used = total_bytes - free_bytes.min(total_bytes);
+    let used_pct = used as f64 * 100.0 / total_bytes as f64;
+    if used_pct >= DISK_CRIT_PCT {
+        DiskLevel::Critical
+    } else if used_pct >= DISK_WARN_PCT {
+        DiskLevel::Low
+    } else {
+        DiskLevel::Ok
+    }
+}
 
 /// Icons currently registered with the shell: (uID, HICON as isize).
 /// Shared between the monitoring thread and the UI thread.
@@ -158,16 +186,22 @@ fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
     }
     if crate::config::SHOW_DISKS.load(Ordering::Relaxed) {
         for d in &state.disks {
+            let (color, note) = match disk_level(d.free_bytes, d.total_bytes) {
+                DiskLevel::Ok => (COLOR_DISK_OK, ""),
+                DiskLevel::Low => (COLOR_DISK_WARN, " (low space)"),
+                DiskLevel::Critical => (COLOR_DISK_CRIT, " (critically low)"),
+            };
             specs.push(IconSpec {
                 id: ID_TRAY_DISK_BASE + (d.letter as u32 - 'A' as u32),
-                color: COLOR_DISK,
+                color,
                 history: d.history.values(),
                 tip: format!(
-                    "Disk {}: {:.0}% active\n{} free of {}",
+                    "Disk {}: {:.0}% active\n{} free of {}{}",
                     d.letter,
                     d.active_pct,
                     format_bytes(d.free_bytes),
                     format_bytes(d.total_bytes),
+                    note,
                 ),
             });
         }
@@ -259,7 +293,18 @@ pub fn reset_after_shell_restart() {
 
 #[cfg(test)]
 mod tests {
-    use super::format_bytes;
+    use super::{disk_level, format_bytes, DiskLevel};
+
+    #[test]
+    fn disk_level_follows_used_space_thresholds() {
+        assert_eq!(disk_level(50, 100), DiskLevel::Ok);
+        assert_eq!(disk_level(21, 100), DiskLevel::Ok);
+        assert_eq!(disk_level(20, 100), DiskLevel::Low);
+        assert_eq!(disk_level(11, 100), DiskLevel::Low);
+        assert_eq!(disk_level(10, 100), DiskLevel::Critical);
+        assert_eq!(disk_level(0, 100), DiskLevel::Critical);
+        assert_eq!(disk_level(0, 0), DiskLevel::Ok);
+    }
 
     #[test]
     fn formats_gigabytes_and_terabytes() {
