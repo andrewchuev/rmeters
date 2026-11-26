@@ -34,10 +34,17 @@ pub struct Px {
     pub a: f32,
 }
 
-const CLEAR: Px = Px { rgb: [0.0; 3], a: 0.0 };
+const CLEAR: Px = Px {
+    rgb: [0.0; 3],
+    a: 0.0,
+};
 
 fn to_f(c: Rgb) -> [f32; 3] {
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+    ]
 }
 
 /// Renders the ring and hole into a `size`×`size` row-major buffer.
@@ -68,7 +75,11 @@ pub fn render_ring(size: usize, used: f32, colors: &RingColors) -> Vec<Px> {
                     } else {
                         // Angle clockwise from 12 o'clock, in 0..TAU.
                         let angle = dx.atan2(-dy).rem_euclid(TAU);
-                        if angle < used * TAU { c_used } else { c_free }
+                        if angle < used * TAU {
+                            c_used
+                        } else {
+                            c_free
+                        }
                     };
                     for i in 0..3 {
                         sum[i] += c[i];
@@ -89,7 +100,14 @@ pub fn render_ring(size: usize, used: f32, colors: &RingColors) -> Vec<Px> {
 
 /// Composites a white label with per-pixel `coverage` (0..=255) over `pixels`,
 /// shifted by (`dx`, `dy`).
-pub fn blend_label(pixels: &mut [Px], size: usize, coverage: &[u8], cov_size: usize, dx: i32, dy: i32) {
+pub fn blend_label(
+    pixels: &mut [Px],
+    size: usize,
+    coverage: &[u8],
+    cov_size: usize,
+    dx: i32,
+    dy: i32,
+) {
     let label = to_f(LABEL_RGB);
     for cy in 0..cov_size {
         for cx in 0..cov_size {
@@ -136,17 +154,37 @@ unsafe fn render_text_coverage(text: &str, font_px: i32, buf: usize) -> Option<V
     let old_bmp = SelectObject(hdc, HGDIOBJ(hbm.0));
 
     let font = CreateFontW(
-        -font_px, 0, 0, 0, FW_BOLD.0 as i32, 0, 0, 0,
-        DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32, CLIP_DEFAULT_PRECIS.0 as u32,
-        ANTIALIASED_QUALITY.0 as u32, DEFAULT_PITCH.0 as u32,
+        -font_px,
+        0,
+        0,
+        0,
+        FW_BOLD.0 as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET.0 as u32,
+        OUT_DEFAULT_PRECIS.0 as u32,
+        CLIP_DEFAULT_PRECIS.0 as u32,
+        ANTIALIASED_QUALITY.0 as u32,
+        DEFAULT_PITCH.0 as u32,
         windows::core::w!("Segoe UI"),
     );
     let old_font = SelectObject(hdc, HGDIOBJ(font.0));
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, COLORREF(0x00FF_FFFF));
     let mut wide: Vec<u16> = text.encode_utf16().collect();
-    let mut rc = RECT { left: 0, top: 0, right: buf as i32, bottom: buf as i32 };
-    DrawTextW(hdc, &mut wide, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+    let mut rc = RECT {
+        left: 0,
+        top: 0,
+        right: buf as i32,
+        bottom: buf as i32,
+    };
+    DrawTextW(
+        hdc,
+        &mut wide,
+        &mut rc,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP,
+    );
 
     // GDI writes gray levels into the color channels; take one as coverage.
     let px = std::slice::from_raw_parts(bits as *const u8, buf * buf * 4);
@@ -161,7 +199,12 @@ unsafe fn render_text_coverage(text: &str, font_px: i32, buf: usize) -> Option<V
 }
 
 /// Creates a zeroed top-down 32-bit DIB section.
-unsafe fn new_dib(size: usize) -> Option<(*mut core::ffi::c_void, windows::Win32::Graphics::Gdi::HBITMAP)> {
+unsafe fn new_dib(
+    size: usize,
+) -> Option<(
+    *mut core::ffi::c_void,
+    windows::Win32::Graphics::Gdi::HBITMAP,
+)> {
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -217,7 +260,13 @@ pub unsafe fn create_ring_icon(
     // The alpha channel defines transparency; the AND mask just has to exist.
     let mask_row = size.div_ceil(16) * 2;
     let mask = vec![0u8; mask_row * size];
-    let hbm_mask = CreateBitmap(size as i32, size as i32, 1, 1, Some(mask.as_ptr() as *const _));
+    let hbm_mask = CreateBitmap(
+        size as i32,
+        size as i32,
+        1,
+        1,
+        Some(mask.as_ptr() as *const _),
+    );
 
     let info = ICONINFO {
         fIcon: true.into(),
@@ -236,7 +285,11 @@ pub unsafe fn create_ring_icon(
 mod tests {
     use super::*;
 
-    const COLORS: RingColors = RingColors { used: [255, 0, 0], free: [0, 255, 0], hole: [0, 0, 255] };
+    const COLORS: RingColors = RingColors {
+        used: [255, 0, 0],
+        free: [0, 255, 0],
+        hole: [0, 0, 255],
+    };
 
     fn at(px: &[Px], size: usize, x: usize, y: usize) -> Px {
         px[y * size + x]

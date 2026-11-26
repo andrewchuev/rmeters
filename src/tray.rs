@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use windows::Win32::Foundation::{COLORREF, HWND};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, DeleteDC, DeleteObject,
-    GetDC, HGDIOBJ, LineTo, MoveToEx, PatBlt, ReleaseDC, SelectObject, BLACKNESS, PS_SOLID,
+    GetDC, LineTo, MoveToEx, PatBlt, ReleaseDC, SelectObject, BLACKNESS, HGDIOBJ, PS_SOLID,
     WHITENESS,
 };
 use windows::Win32::UI::Shell::{
@@ -71,9 +71,16 @@ static ADDED: Mutex<Vec<(u32, isize)>> = Mutex::new(Vec::new());
 /// What a tray icon draws.
 enum IconKind<'a> {
     /// Scrolling history graph in a BGR color.
-    Sparkline { color: u32, history: &'a VecDeque<f32> },
+    Sparkline {
+        color: u32,
+        history: &'a VecDeque<f32>,
+    },
     /// Donut chart of a used share (0..=1) with a centered label.
-    Ring { used: f32, color: Rgb, label: String },
+    Ring {
+        used: f32,
+        color: Rgb,
+        label: String,
+    },
 }
 
 /// One tray icon to show on this tick.
@@ -84,7 +91,11 @@ struct IconSpec<'a> {
 }
 
 fn set_tooltip(tip: &mut [u16; 128], text: &str) {
-    let wide: Vec<u16> = text.encode_utf16().take(127).chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = text
+        .encode_utf16()
+        .take(127)
+        .chain(std::iter::once(0))
+        .collect();
     tip[..wide.len()].copy_from_slice(&wide);
 }
 
@@ -186,14 +197,20 @@ fn icon_specs(state: &MetricsState) -> Vec<IconSpec<'_>> {
     if crate::config::SHOW_CPU.load(Ordering::Relaxed) {
         specs.push(IconSpec {
             id: ID_TRAY_CPU,
-            kind: IconKind::Sparkline { color: COLOR_CPU, history: state.cpu_history.values() },
+            kind: IconKind::Sparkline {
+                color: COLOR_CPU,
+                history: state.cpu_history.values(),
+            },
             tip: format!("CPU: {:.0}%", state.cpu_usage),
         });
     }
     if crate::config::SHOW_RAM.load(Ordering::Relaxed) {
         specs.push(IconSpec {
             id: ID_TRAY_RAM,
-            kind: IconKind::Sparkline { color: COLOR_RAM, history: state.ram_history.values() },
+            kind: IconKind::Sparkline {
+                color: COLOR_RAM,
+                history: state.ram_history.values(),
+            },
             tip: format!("RAM: {:.0}%", state.ram_usage_pct),
         });
     }
@@ -267,7 +284,11 @@ pub fn update_tray(hwnd: HWND, state: &MetricsState) {
                     create_sparkline_icon(history, *color, cx, cy)
                 }
                 IconKind::Ring { used, color, label } => {
-                    let colors = RingColors { used: *color, free: DISK_FREE, hole: DISK_HOLE };
+                    let colors = RingColors {
+                        used: *color,
+                        free: DISK_FREE,
+                        hole: DISK_HOLE,
+                    };
                     create_ring_icon(cx as usize, *used, &colors, label)
                 }
             };

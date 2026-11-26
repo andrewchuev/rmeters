@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static AUTOSTART_ENABLED: AtomicBool = AtomicBool::new(false);
 pub static SHOW_CPU: AtomicBool = AtomicBool::new(true);
@@ -25,7 +25,11 @@ pub fn load_config() {
                 let mut parts = line.splitn(2, ':');
                 let key = parts.next()?.trim();
                 let val = parts.next()?.trim();
-                if key == key_name { Some(val) } else { None }
+                if key == key_name {
+                    Some(val)
+                } else {
+                    None
+                }
             })
         };
         let flag = |key_name: &str, default: bool| -> bool {
@@ -58,7 +62,9 @@ pub fn save_config() {
     let path = config_path();
     if let Some(dir) = path.parent() {
         if let Err(e) = fs::create_dir_all(dir) {
-            crate::log_info(&format!("save_config: failed to create config directory: {e}"));
+            crate::log_info(&format!(
+                "save_config: failed to create config directory: {e}"
+            ));
             return;
         }
     }
@@ -80,11 +86,10 @@ pub fn save_config() {
 
 /// Returns true if the rmeters autostart registry value is present.
 pub fn is_autostart_enabled() -> bool {
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER,
-        KEY_QUERY_VALUE, HKEY,
-    };
     use windows::core::w;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE,
+    };
 
     unsafe {
         let mut hkey = HKEY::default();
@@ -107,16 +112,19 @@ pub fn is_autostart_enabled() -> bool {
 /// Returns `Err` if the registry key cannot be opened or the value cannot be written.
 pub fn set_autostart(enable: bool) -> Result<(), std::io::Error> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegSetValueExW, RegDeleteValueW, HKEY_CURRENT_USER,
-        KEY_SET_VALUE, REG_SZ, HKEY,
-    };
     use windows::core::w;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+        KEY_SET_VALUE, REG_SZ,
+    };
 
     let path = std::env::current_exe()?;
     let path_str = path.to_string_lossy();
     let cmd = format!("\"{}\"", path_str);
-    let cmd_wide: Vec<u16> = std::ffi::OsStr::new(&cmd).encode_wide().chain(Some(0)).collect();
+    let cmd_wide: Vec<u16> = std::ffi::OsStr::new(&cmd)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
 
     unsafe {
         let mut hkey = HKEY::default();

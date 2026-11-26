@@ -7,9 +7,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
-static WM_TASKBAR_CREATED: LazyLock<u32> = LazyLock::new(|| unsafe {
-    RegisterWindowMessageW(w!("TaskbarCreated"))
-});
+static WM_TASKBAR_CREATED: LazyLock<u32> =
+    LazyLock::new(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) });
 
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
@@ -65,7 +64,10 @@ pub fn create_main_window() -> HWND {
             class_name,
             w!("rmeters"),
             WS_POPUP,
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             None,
             HMENU::default(),
             instance,

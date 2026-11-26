@@ -18,7 +18,7 @@ use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetMessageW, TranslateMessage, DispatchMessageW, MSG, WM_CLOSE,
+    DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_CLOSE,
 };
 
 fn log_path() -> std::path::PathBuf {
@@ -26,7 +26,11 @@ fn log_path() -> std::path::PathBuf {
 }
 
 pub fn log_info(msg: &str) {
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path()) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path())
+    {
         let _ = writeln!(file, "[LOG] {}", msg);
     }
 }
@@ -54,9 +58,7 @@ fn main() -> windows::core::Result<()> {
     // Ensure only one instance is running.
     // SAFETY: CreateMutexW is a straightforward Win32 call with no alignment
     // or lifetime requirements beyond the arguments passed.
-    let mutex_result = unsafe {
-        CreateMutexW(None, true, w!("Global\\rmeters_single_instance"))
-    };
+    let mutex_result = unsafe { CreateMutexW(None, true, w!("Global\\rmeters_single_instance")) };
     match mutex_result {
         Err(e) => {
             log_info(&format!("CreateMutexW failed: {e:?}"));

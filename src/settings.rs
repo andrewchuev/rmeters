@@ -7,30 +7,27 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteObject, EndPaint,
-    FillRect, HBRUSH, HDC, HGDIOBJ, HMONITOR, LineTo, MonitorFromPoint, MoveToEx,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    BeginPaint, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteObject, EndPaint, FillRect,
+    LineTo, MonitorFromPoint, MoveToEx, SelectObject, SetBkMode, SetTextColor, HBRUSH, HDC,
+    HGDIOBJ, HMONITOR, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    ICC_LINK_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, NMLINK, NM_CLICK,
-    SetWindowTheme,
+    InitCommonControlsEx, SetWindowTheme, ICC_LINK_CLASS, INITCOMMONCONTROLSEX, NMHDR, NMLINK,
+    NM_CLICK,
 };
 use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    GetClientRect, GetCursorPos, GetDlgCtrlID, HMENU, IsIconic, NONCLIENTMETRICSW,
-    RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowTextW,
-    ShowWindow, SPI_GETNONCLIENTMETRICS, SW_RESTORE, SW_SHOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
-    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_ERASEBKGND, WM_NOTIFY, WM_PAINT, WM_SETFONT, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU,
-    WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetDlgCtrlID,
+    IsIconic, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowTextW, ShowWindow,
+    SystemParametersInfoW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
+    CS_HREDRAW, CS_VREDRAW, HMENU, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SW_RESTORE, SW_SHOW,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND, WM_NOTIFY, WM_PAINT,
+    WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
 const IDC_CHK_AUTOSTART: usize = 2002;
@@ -44,11 +41,11 @@ const IDC_LBL_OPTIONS: usize = 3001;
 const IDC_LBL_ABOUT: usize = 3002;
 
 // Colors in BGR order (Windows COLORREF convention)
-const COLOR_BG: u32    = 0x1E1E1E;
-const COLOR_TEXT: u32  = 0xD0D0D0;
-const COLOR_DIM: u32   = 0x686868;
+const COLOR_BG: u32 = 0x1E1E1E;
+const COLOR_TEXT: u32 = 0xD0D0D0;
+const COLOR_DIM: u32 = 0x686868;
 const COLOR_WHITE: u32 = 0xF0F0F0;
-const COLOR_SEP: u32   = 0x3C3C3C;
+const COLOR_SEP: u32 = 0x3C3C3C;
 
 static SETTINGS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SETTINGS_FONT: AtomicIsize = AtomicIsize::new(0);
@@ -61,7 +58,11 @@ fn icon_options() -> [(usize, PCWSTR, &'static AtomicBool); ICON_OPTION_COUNT] {
     [
         (IDC_CHK_CPU, w!("Show CPU Icon"), &crate::config::SHOW_CPU),
         (IDC_CHK_RAM, w!("Show RAM Icon"), &crate::config::SHOW_RAM),
-        (IDC_CHK_DISKS, w!("Show Disk Icons"), &crate::config::SHOW_DISKS),
+        (
+            IDC_CHK_DISKS,
+            w!("Show Disk Icons"),
+            &crate::config::SHOW_DISKS,
+        ),
     ]
 }
 
@@ -99,7 +100,11 @@ fn dpi_scale(v: i32, dpi: u32) -> i32 {
 /// Returns the current settings window handle, or None if it is not open.
 pub fn get_settings_hwnd() -> Option<HWND> {
     let raw = SETTINGS_HWND.load(Ordering::Relaxed);
-    if raw != 0 { Some(HWND(raw as *mut _)) } else { None }
+    if raw != 0 {
+        Some(HWND(raw as *mut _))
+    } else {
+        None
+    }
 }
 
 unsafe fn dark_brush() -> HBRUSH {
@@ -113,11 +118,16 @@ unsafe fn dark_brush() -> HBRUSH {
 }
 
 pub unsafe extern "system" fn settings_wnd_proc(
-    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
 ) -> LRESULT {
     match msg {
         WM_CREATE => {
-            let Ok(hmod) = GetModuleHandleW(None) else { return LRESULT(-1) };
+            let Ok(hmod) = GetModuleHandleW(None) else {
+                return LRESULT(-1);
+            };
 
             let mut ncm = NONCLIENTMETRICSW {
                 cbSize: size_of::<NONCLIENTMETRICSW>() as u32,
@@ -145,30 +155,64 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             macro_rules! ctrl {
                 ($class:expr, $text:expr, $style:expr, $x:expr, $y:expr, $w:expr, $h:expr, $id:expr) => {{
-                    CreateWindowExW(WINDOW_EX_STYLE(0), $class, $text,
+                    CreateWindowExW(
+                        WINDOW_EX_STYLE(0),
+                        $class,
+                        $text,
                         WS_CHILD | WS_VISIBLE | WINDOW_STYLE($style),
-                        dpi_scale($x, dpi), dpi_scale($y, dpi),
-                        dpi_scale($w, dpi), dpi_scale($h, dpi),
-                        hwnd, HMENU($id as *mut _), hmod, None)
+                        dpi_scale($x, dpi),
+                        dpi_scale($y, dpi),
+                        dpi_scale($w, dpi),
+                        dpi_scale($h, dpi),
+                        hwnd,
+                        HMENU($id as *mut _),
+                        hmod,
+                        None,
+                    )
                 }};
             }
 
             // ── Version label ──────────────────────────────────────────────
             let ver = HSTRING::from(format!("RMeters  v{}", env!("CARGO_PKG_VERSION")));
-            if let Ok(l) = ctrl!(w!("STATIC"), w!(""), 0, PAD, VERSION_TOP, CONTENT_W, VERSION_H, IDC_LBL_VERSION) {
+            if let Ok(l) = ctrl!(
+                w!("STATIC"),
+                w!(""),
+                0,
+                PAD,
+                VERSION_TOP,
+                CONTENT_W,
+                VERSION_H,
+                IDC_LBL_VERSION
+            ) {
                 let _ = SetWindowTextW(l, &ver);
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
 
             // ── Options ────────────────────────────────────────────────────
-            if let Ok(l) = ctrl!(w!("STATIC"), w!("OPTIONS"), 0, PAD, OPTIONS_LABEL_TOP, CONTENT_W, LABEL_H, IDC_LBL_OPTIONS) {
+            if let Ok(l) = ctrl!(
+                w!("STATIC"),
+                w!("OPTIONS"),
+                0,
+                PAD,
+                OPTIONS_LABEL_TOP,
+                CONTENT_W,
+                LABEL_H,
+                IDC_LBL_OPTIONS
+            ) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
             let mut row_y = OPTIONS_TOP;
             for (id, label, flag) in icon_options() {
-                if let Ok(c) = ctrl!(w!("BUTTON"), label,
-                    BS_AUTOCHECKBOX as u32, PAD, row_y, CONTENT_W, ROW_H, id)
-                {
+                if let Ok(c) = ctrl!(
+                    w!("BUTTON"),
+                    label,
+                    BS_AUTOCHECKBOX as u32,
+                    PAD,
+                    row_y,
+                    CONTENT_W,
+                    ROW_H,
+                    id
+                ) {
                     let checked = flag.load(Ordering::Relaxed);
                     SendMessageW(c, BM_SETCHECK, WPARAM(checked as usize), LPARAM(0));
                     SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
@@ -176,43 +220,85 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 }
                 row_y += ROW_H;
             }
-            if let Ok(c) = ctrl!(w!("BUTTON"), w!("Start with Windows"),
-                BS_AUTOCHECKBOX as u32, PAD, row_y, CONTENT_W, ROW_H, IDC_CHK_AUTOSTART)
-            {
+            if let Ok(c) = ctrl!(
+                w!("BUTTON"),
+                w!("Start with Windows"),
+                BS_AUTOCHECKBOX as u32,
+                PAD,
+                row_y,
+                CONTENT_W,
+                ROW_H,
+                IDC_CHK_AUTOSTART
+            ) {
                 SendMessageW(c, BM_SETCHECK, WPARAM(autostart as usize), LPARAM(0));
                 SendMessageW(c, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(c, w!("DarkMode_Explorer"), PCWSTR::null());
             }
 
             // ── About ──────────────────────────────────────────────────────
-            if let Ok(l) = ctrl!(w!("STATIC"), w!("ABOUT"), 0, PAD, ABOUT_TOP, CONTENT_W, LABEL_H, IDC_LBL_ABOUT) {
+            if let Ok(l) = ctrl!(
+                w!("STATIC"),
+                w!("ABOUT"),
+                0,
+                PAD,
+                ABOUT_TOP,
+                CONTENT_W,
+                LABEL_H,
+                IDC_LBL_ABOUT
+            ) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
             }
-            if let Ok(l) = ctrl!(w!("SysLink"),
+            if let Ok(l) = ctrl!(
+                w!("SysLink"),
                 w!("<a href=\"https://rmeters.reslab.pro\">rmeters.reslab.pro</a>"),
-                0, PAD, LINKS_TOP, CONTENT_W, LINK_H, 0usize)
-            {
+                0,
+                PAD,
+                LINKS_TOP,
+                CONTENT_W,
+                LINK_H,
+                0usize
+            ) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
             }
-            if let Ok(l) = ctrl!(w!("SysLink"),
+            if let Ok(l) = ctrl!(
+                w!("SysLink"),
                 w!("<a href=\"mailto:andrew.chuev@gmail.com\">andrew.chuev@gmail.com</a>"),
-                0, PAD, LINKS_TOP + LINK_H + 4, CONTENT_W, LINK_H, 0usize)
-            {
+                0,
+                PAD,
+                LINKS_TOP + LINK_H + 4,
+                CONTENT_W,
+                LINK_H,
+                0usize
+            ) {
                 SendMessageW(l, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(l, w!(""), w!(""));
             }
 
             // ── Buttons ────────────────────────────────────────────────────
-            if let Ok(b) = ctrl!(w!("BUTTON"), w!("Exit RMeters"),
-                BS_PUSHBUTTON as u32, PAD, BUTTONS_TOP, BTN_W, BTN_H, IDC_BTN_EXIT)
-            {
+            if let Ok(b) = ctrl!(
+                w!("BUTTON"),
+                w!("Exit RMeters"),
+                BS_PUSHBUTTON as u32,
+                PAD,
+                BUTTONS_TOP,
+                BTN_W,
+                BTN_H,
+                IDC_BTN_EXIT
+            ) {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
             }
-            if let Ok(b) = ctrl!(w!("BUTTON"), w!("Close"),
-                BS_PUSHBUTTON as u32, CLIENT_W - PAD - BTN_W, BUTTONS_TOP, BTN_W, BTN_H, IDC_BTN_CLOSE)
-            {
+            if let Ok(b) = ctrl!(
+                w!("BUTTON"),
+                w!("Close"),
+                BS_PUSHBUTTON as u32,
+                CLIENT_W - PAD - BTN_W,
+                BUTTONS_TOP,
+                BTN_W,
+                BTN_H,
+                IDC_BTN_CLOSE
+            ) {
                 SendMessageW(b, WM_SETFONT, fwp, LPARAM(1));
                 let _ = SetWindowTheme(b, w!("DarkMode_Explorer"), PCWSTR::null());
             }
@@ -241,7 +327,11 @@ pub unsafe extern "system" fn settings_wnd_proc(
 
             let pen = CreatePen(PS_SOLID, 1, COLORREF(COLOR_SEP));
             let old = SelectObject(hdc, HGDIOBJ(pen.0));
-            for y in [dpi_scale(SEP_OPTIONS, dpi), dpi_scale(SEP_ABOUT, dpi), dpi_scale(SEP_BUTTONS, dpi)] {
+            for y in [
+                dpi_scale(SEP_OPTIONS, dpi),
+                dpi_scale(SEP_ABOUT, dpi),
+                dpi_scale(SEP_BUTTONS, dpi),
+            ] {
                 let _ = MoveToEx(hdc, x1, y, None);
                 let _ = LineTo(hdc, x2, y);
             }
@@ -282,16 +372,22 @@ pub unsafe extern "system" fn settings_wnd_proc(
                 // SAFETY: NM_CLICK from a SysLink control guarantees lparam points to NMLINK.
                 let nml = &*(lparam.0 as *const NMLINK);
                 let url = PCWSTR(nml.item.szUrl.as_ptr());
-                ShellExecuteW(HWND::default(), w!("open"), url,
-                    PCWSTR::null(), PCWSTR::null(), SW_SHOW);
+                ShellExecuteW(
+                    HWND::default(),
+                    w!("open"),
+                    url,
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    SW_SHOW,
+                );
             }
             LRESULT(0)
         }
 
         WM_COMMAND => {
-            let id     = wparam.0 & 0xffff;
+            let id = wparam.0 & 0xffff;
             let notify = (wparam.0 >> 16) as u32;
-            let ctrl   = HWND(lparam.0 as *mut _);
+            let ctrl = HWND(lparam.0 as *mut _);
 
             if notify == BN_CLICKED {
                 if let Some((_, _, flag)) = icon_options().into_iter().find(|o| o.0 == id) {
@@ -335,7 +431,10 @@ pub unsafe extern "system" fn settings_wnd_proc(
             LRESULT(0)
         }
 
-        WM_CLOSE   => { let _ = DestroyWindow(hwnd); LRESULT(0) }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             SETTINGS_HWND.store(0, Ordering::Relaxed);
 
@@ -371,7 +470,9 @@ pub fn show_settings() {
         };
         let _ = InitCommonControlsEx(&icc);
 
-        let Ok(hmod) = GetModuleHandleW(None) else { return };
+        let Ok(hmod) = GetModuleHandleW(None) else {
+            return;
+        };
         let class_name = w!("rmeters_settings");
 
         let wc = WNDCLASSW {
@@ -403,10 +504,17 @@ pub fn show_settings() {
         let (x, y) = center_on_monitor(hmon, win_w, win_h);
 
         if let Ok(hwnd) = CreateWindowExW(
-            WINDOW_EX_STYLE(0), class_name, w!("RMeters \u{2014} Settings"),
+            WINDOW_EX_STYLE(0),
+            class_name,
+            w!("RMeters \u{2014} Settings"),
             style,
-            x, y, win_w, win_h,
-            None, HMENU::default(), hmod,
+            x,
+            y,
+            win_w,
+            win_h,
+            None,
+            HMENU::default(),
+            hmod,
             None,
         ) {
             set_window_icon(hwnd);
@@ -434,7 +542,9 @@ unsafe fn set_window_icon(hwnd: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
         LoadImageW, IMAGE_FLAGS, IMAGE_ICON, LR_DEFAULTSIZE, WM_SETICON,
     };
-    let Ok(hmod) = GetModuleHandleW(None) else { return };
+    let Ok(hmod) = GetModuleHandleW(None) else {
+        return;
+    };
     if let Ok(h) = LoadImageW(hmod, w!("IDI_APP_ICON"), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE) {
         SendMessageW(hwnd, WM_SETICON, WPARAM(1), LPARAM(h.0 as isize));
     }
@@ -462,12 +572,15 @@ unsafe fn cursor_monitor() -> HMONITOR {
 
 unsafe fn center_on_monitor(hmon: HMONITOR, win_w: i32, win_h: i32) -> (i32, i32) {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
-    let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+    let mut mi = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
     if GetMonitorInfoW(hmon, &mut mi).as_bool() {
         let rc = mi.rcWork;
         return (
             rc.left + (rc.right - rc.left - win_w) / 2,
-            rc.top  + (rc.bottom - rc.top  - win_h) / 2,
+            rc.top + (rc.bottom - rc.top - win_h) / 2,
         );
     }
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};

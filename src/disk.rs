@@ -22,7 +22,11 @@ pub fn sample() -> Vec<DiskSample> {
         .filter(|&letter| unsafe { GetDriveTypeW(&root_path(letter)) } == DRIVE_FIXED)
         .map(|letter| {
             let (free_bytes, total_bytes) = free_space(letter);
-            DiskSample { letter, free_bytes, total_bytes }
+            DiskSample {
+                letter,
+                free_bytes,
+                total_bytes,
+            }
         })
         .collect()
 }
@@ -35,8 +39,11 @@ fn free_space(letter: char) -> (u64, u64) {
     let mut free = 0u64;
     let mut total = 0u64;
     // SAFETY: valid root path and output pointers.
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(&root_path(letter), Some(&mut free), Some(&mut total), None)
-    };
-    if ok.is_ok() { (free, total) } else { (0, 0) }
+    let ok =
+        unsafe { GetDiskFreeSpaceExW(&root_path(letter), Some(&mut free), Some(&mut total), None) };
+    if ok.is_ok() {
+        (free, total)
+    } else {
+        (0, 0)
+    }
 }
