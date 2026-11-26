@@ -29,7 +29,7 @@ const COLOR_CPU: u32 = 0x00FF9900;
 const COLOR_RAM: u32 = 0x0033CC19;
 
 // Disk ring colors (RGB).
-const DISK_OK: Rgb = [204, 102, 255]; // violet
+const DISK_OK: Rgb = [60, 210, 110]; // green
 const DISK_WARN: Rgb = [255, 210, 0]; // yellow
 const DISK_CRIT: Rgb = [255, 60, 60]; // red
 const DISK_FREE: Rgb = [90, 90, 90];

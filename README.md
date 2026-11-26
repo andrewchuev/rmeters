@@ -24,7 +24,7 @@ Settings window, opened by clicking any tray icon:
 
 - **CPU and RAM Icons**: Scrolling sparkline graphs with a 60-second history — CPU in blue, RAM in green. Hover an icon for the exact value.
 - **Disk Icons**: One ring chart per local fixed volume (C:, D:, …) showing how full it is, filled clockwise from the top, with the drive letter in the middle. The tooltip shows the used share and free space. Volumes that appear or disappear are picked up automatically; removable and network drives are not shown.
-- **Disk Space Alerts**: The used part of the ring is violet normally, yellow from 85% used (low space) and red from 95% (critically low).
+- **Disk Space Alerts**: The used part of the ring is green normally, yellow from 85% used (low space) and red from 95% (critically low).
 - **Per-Icon Toggles**: CPU, RAM and disk icons can be shown or hidden individually; at least one always stays visible so the settings remain reachable.
 - **Settings Window**: Left- or right-click any tray icon to toggle icons and autostart, or to exit the app.
 - **Explorer Restart Recovery**: Icons are re-added automatically when Explorer restarts.
