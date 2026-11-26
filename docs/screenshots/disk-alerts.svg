@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="264" height="144" viewBox="0 0 264 144">
+  <!-- Disk ring icons at 6x a 16px icon: low space (yellow, from 85% used) and critically low (red, from 95%).
+       Colors match src/tray.rs; ring hole is 60% of the outer radius as in src/ring_icon.rs. -->
+  <rect width="264" height="144" rx="12" fill="#202020"/>
+
+  <g font-family="Segoe UI, Arial, Helvetica, sans-serif" font-weight="700" font-size="30" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">
+    <!-- Drive C: 88% used -->
+    <circle cx="72" cy="72" r="40" fill="#5A5A5A"/>
+    <circle cx="72" cy="72" r="32" fill="none" stroke="#FFD200" stroke-width="16" pathLength="100" stroke-dasharray="88 100" transform="rotate(-90 72 72)"/>
+    <circle cx="72" cy="72" r="24" fill="#1C1C1C"/>
+    <text x="72" y="73">C</text>
+
+    <!-- Drive D: 96% used -->
+    <circle cx="192" cy="72" r="40" fill="#5A5A5A"/>
+    <circle cx="192" cy="72" r="32" fill="none" stroke="#FF3C3C" stroke-width="16" pathLength="100" stroke-dasharray="96 100" transform="rotate(-90 192 72)"/>
+    <circle cx="192" cy="72" r="24" fill="#1C1C1C"/>
+    <text x="192" y="73">D</text>
+  </g>
+</svg>

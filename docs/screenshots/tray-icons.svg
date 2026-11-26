@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="504" height="144" viewBox="0 0 504 144">
+  <!-- Tray icons drawn at 6x a 16px icon: CPU and RAM sparklines, disk rings for C: and D:.
+       Colors match src/tray.rs; ring hole is 60% of the outer radius as in src/ring_icon.rs. -->
+  <rect width="504" height="144" rx="12" fill="#202020"/>
+
+  <!-- CPU sparkline -->
+  <path fill="#0099FF" d="M24 120 V116.2 H27 V114.2 H30 V115.2 H33 V112.3 H36 V108.5 H39 V113.3 H42 V115.2 H45 V111.4 H48 V98.9 H51 V86.4 H54 V102.7 H57 V111.4 H60 V114.2 H63 V115.2 H66 V113.3 H69 V109.4 H72 V112.3 H75 V114.2 H78 V106.6 H81 V93.1 H84 V75.8 H87 V90.2 H90 V105.6 H93 V111.4 H96 V113.3 H99 V110.4 H102 V102.7 H105 V108.5 H108 V112.3 H111 V114.2 H114 V111.4 H117 V107.5 H120 V120 Z"/>
+
+  <!-- RAM sparkline -->
+  <path fill="#19CC33" d="M144 120 V64.3 H147 V64.3 H150 V63.4 H153 V63.4 H156 V62.4 H159 V62.4 H162 V61.4 H165 V61.4 H168 V60.5 H171 V58.6 H174 V56.6 H177 V56.6 H180 V57.6 H183 V58.6 H186 V59.5 H189 V59.5 H192 V59.5 H195 V58.6 H198 V56.6 H201 V53.8 H204 V50.9 H207 V51.8 H210 V53.8 H213 V55.7 H216 V56.6 H219 V56.6 H222 V55.7 H225 V55.7 H228 V56.6 H231 V56.6 H234 V55.7 H237 V54.7 H240 V120 Z"/>
+
+  <g font-family="Segoe UI, Arial, Helvetica, sans-serif" font-weight="700" font-size="30" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">
+    <!-- Drive C: 46% used -->
+    <circle cx="312" cy="72" r="40" fill="#5A5A5A"/>
+    <circle cx="312" cy="72" r="32" fill="none" stroke="#3CD26E" stroke-width="16" pathLength="100" stroke-dasharray="46 100" transform="rotate(-90 312 72)"/>
+    <circle cx="312" cy="72" r="24" fill="#1C1C1C"/>
+    <text x="312" y="73">C</text>
+
+    <!-- Drive D: 68% used -->
+    <circle cx="432" cy="72" r="40" fill="#5A5A5A"/>
+    <circle cx="432" cy="72" r="32" fill="none" stroke="#3CD26E" stroke-width="16" pathLength="100" stroke-dasharray="68 100" transform="rotate(-90 432 72)"/>
+    <circle cx="432" cy="72" r="24" fill="#1C1C1C"/>
+    <text x="432" y="73">D</text>
+  </g>
+</svg>

@@ -10,11 +10,11 @@ A lightweight system monitor for the Windows notification area (system tray), wr
 
 Tray icons (enlarged ×6) — CPU and RAM graphs, then fill rings for drives C: and D:
 
-![CPU, RAM and disk tray icons](docs/screenshots/tray-icons.png)
+![CPU, RAM and disk tray icons](docs/screenshots/tray-icons.svg)
 
 Low-space alerts — the ring turns yellow from 85% used and red from 95%:
 
-![Disk icons with low and critically low space](docs/screenshots/disk-alerts.png)
+![Disk icons with low and critically low space](docs/screenshots/disk-alerts.svg)
 
 Settings window, opened by clicking any tray icon:
 
